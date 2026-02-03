@@ -6,14 +6,15 @@ import { Button } from "@workspace/ui/components/button";
 import { Input } from "@workspace/ui/components/input";
 import { Label } from "@workspace/ui/components/label";
 import { QRCodeSVG } from "qrcode.react";
-import { createClient } from "@/utils/supabase/client";
 import { AppHeader } from "@/components/app-header";
+import { SessionGate } from "@/components/session-gate";
 import {
   AVATAR_SIZE,
   getAvatarClass,
   getInitials,
 } from "@/components/lobby-player-bubbles";
 import { LobbyPlayerOrbit } from "@/components/lobby-player-orbit";
+import { useAnonSession } from "@/hooks/use-anon-session";
 
 type LobbyState = "loading" | "needs-name" | "joining" | "ready" | "error";
 type StoredPlayer = {
@@ -37,6 +38,12 @@ export default function LobbyPage() {
   const [currentPlayerId, setCurrentPlayerId] = useState("");
   const [hostPlayerId, setHostPlayerId] = useState("");
   const [isStarting, setIsStarting] = useState(false);
+  const {
+    session,
+    error: sessionError,
+    loading: sessionLoading,
+    supabase: supabaseClient,
+  } = useAnonSession();
   const publicUrl =
     process.env.NEXT_PUBLIC_URL ||
     (typeof window !== "undefined" ? window.location.origin : "");
@@ -48,20 +55,11 @@ export default function LobbyPage() {
 
 
   useEffect(() => {
-    if (!code) return;
-    const supabase = createClient();
+    if (!code || sessionLoading) return;
+    const supabase = supabaseClient;
 
     const init = async () => {
       setState("loading");
-      const { data: sessionData } = await supabase.auth.getSession();
-      if (!sessionData.session) {
-        const { error: authError } = await supabase.auth.signInAnonymously();
-        if (authError) {
-          setState("error");
-          setError(authError.message);
-          return;
-        }
-      }
 
       const { data: gameData, error: gameError } = await supabase.rpc(
         "get_game_by_code",
@@ -119,7 +117,7 @@ export default function LobbyPage() {
         localStorage.removeItem(storedKey);
       }
 
-      const userId = sessionData.session?.user.id;
+      const userId = session?.user.id;
       if (userId) {
         const { data: existingPlayer } = await supabase
           .from("players")
@@ -154,11 +152,11 @@ export default function LobbyPage() {
     };
 
     init();
-  }, [code, router]);
+  }, [code, router, session, sessionLoading, supabaseClient]);
 
   useEffect(() => {
     if (!gameId || !currentPlayerId) return;
-    const supabase = createClient();
+    const supabase = supabaseClient;
 
     const channel = supabase
       .channel(`lobby:${gameId}`)
@@ -205,9 +203,9 @@ export default function LobbyPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [code, currentPlayerId, gameId, router]);
+  }, [code, currentPlayerId, gameId, router, supabaseClient]);
 
-  const loadPlayers = async (id: string, supabase = createClient()) => {
+  const loadPlayers = async (id: string, supabase = supabaseClient) => {
     const { data: playersData } = await supabase
       .from("players")
       .select("id, name")
@@ -222,7 +220,7 @@ export default function LobbyPage() {
   const handleJoin = async () => {
     if (!name.trim()) return;
     setState("joining");
-    const supabase = createClient();
+    const supabase = supabaseClient;
 
     const { data, error: joinError } = await supabase.rpc("join_game", {
       p_code: code,
@@ -254,7 +252,7 @@ export default function LobbyPage() {
   const handleStartGame = async () => {
     if (!gameId || !isHost || players.length < 3) return;
     setIsStarting(true);
-    const supabase = createClient();
+    const supabase = supabaseClient;
     const { error: startError } = await supabase.rpc("start_game", {
       p_game_id: gameId,
     });
@@ -278,7 +276,8 @@ export default function LobbyPage() {
   };
 
   return (
-    <main className="relative min-h-svh overflow-hidden bg-[#f7f2e7] text-slate-900 dark:bg-slate-950 dark:text-slate-50">
+    <SessionGate loading={sessionLoading} error={sessionError}>
+      <main className="relative min-h-svh overflow-hidden bg-[#f7f2e7] text-slate-900 dark:bg-slate-950 dark:text-slate-50">
       <div className="pointer-events-none absolute -top-24 left-1/2 h-80 w-80 -translate-x-1/2 rounded-full bg-[radial-gradient(circle_at_center,rgba(255,86,120,0.45),transparent_65%)] blur-2xl" />
       <div className="pointer-events-none absolute -bottom-32 right-0 h-96 w-96 rounded-full bg-[radial-gradient(circle_at_center,rgba(70,210,255,0.55),transparent_65%)] blur-3xl" />
       <div className="pointer-events-none absolute left-12 top-20 hidden h-32 w-32 rotate-6 rounded-3xl border-[3px] border-[#1f2b7a]/60 bg-white/70 shadow-[0_20px_45px_rgba(31,43,122,0.25)] lg:block dark:border-[#7ce7ff]/70 dark:bg-slate-900/60" />
@@ -429,6 +428,7 @@ export default function LobbyPage() {
           </div>
         </div>
       )}
-    </main>
+      </main>
+    </SessionGate>
   );
 }
