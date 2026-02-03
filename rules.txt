@@ -1,0 +1,251 @@
+Below is a **clean, complete, and consolidated ruleset** for **Flip 7**, rewritten for clarity while preserving **all gameplay rules, edge cases, and sequencing** from the official PDF. No rules are omitted or simplified away.
+
+---
+
+## FLIP 7 — COMPLETE RULES
+
+### Game Overview
+
+Flip 7 is a press-your-luck card game where players accumulate points over multiple rounds. Players may stop to bank points or continue drawing cards to increase their score—at the risk of busting and losing everything for the round.
+
+* **Players:** 3+
+* **Ages:** 8+
+* **Game Length:** ~20 minutes
+* **Winning Score:** 200 points
+
+
+
+---
+
+## Components
+
+### Deck Composition (94 cards total)
+
+#### Number Cards
+
+* Cards numbered **0 through 12**
+* Quantity increases with value:
+
+  * Twelve 12s, eleven 11s, ten 10s … down to **one 1**
+  * **One 0** (worth zero points)
+
+> The 0 card is a Number card. It adds no points but counts toward the Flip 7 bonus.
+
+#### Score Modifier Cards
+
+* **+2, +4, +6, +8, +10** (multiple copies)
+* **x2** multiplier cards
+
+#### Action Cards
+
+* **Freeze**
+* **Flip Three**
+* **Second Chance**
+
+---
+
+## Objective
+
+Be the first player to reach **200 points**.
+Points are earned by summing Number cards and applying Modifier cards.
+
+---
+
+## Setup
+
+1. Shuffle the deck thoroughly.
+2. Choose a Dealer for the round.
+3. Keep score with pen and paper (or a score app).
+4. If playing with **more than 18 players**, use **two decks**.
+
+---
+
+## Round Start: Initial Deal
+
+* In turn order, the Dealer deals **one card face up** to each player, including themselves.
+* **If an Action card appears during dealing**, immediately pause the deal and resolve it.
+* Resume dealing until every player has been dealt a card.
+
+> Important: At the end of the initial deal, players may have:
+>
+> * No cards
+> * Only Modifier cards
+> * Multiple cards
+>   This is normal and depends on Action cards resolved during the deal.
+
+---
+
+## Active Players
+
+A player is **active** if they:
+
+* Have not busted, and
+* Have not chosen to Stay
+
+Only active players may be targeted by Action cards.
+
+---
+
+## Player Turns: Hit or Stay
+
+Starting with the Dealer and proceeding clockwise:
+
+### Hit
+
+* The player is dealt **one card**.
+* Number cards are placed in a single row.
+* Modifier and Action cards are placed **above** the Number cards.
+* If a duplicate Number card is drawn, the player **busts** immediately (see Busting).
+
+### Stay
+
+* The player exits the round and **banks their current points**.
+* A player may Stay **only if they have at least one card in front of them**.
+* Stayed players are no longer active.
+
+---
+
+## Busting
+
+A player **busts** if they receive a Number card with the **same value as one already in their line**, unless prevented by a Second Chance card.
+
+* A busted player:
+
+  * Is immediately out of the round
+  * Scores **zero points** for the round
+
+---
+
+## Flip 7 Bonus
+
+If a player has **seven unique Number cards** face up at the same time:
+
+* The round **ends immediately for all players**
+* That player scores an **additional 15 bonus points**
+
+Important rules:
+
+* Only **Number cards** count
+* Action and Modifier cards do **not**
+* The **0 card counts** as a Number card
+
+---
+
+## Action Cards (Resolved Immediately)
+
+### Freeze
+
+* Target player immediately:
+
+  * Banks all points collected so far
+  * Is out of the round
+
+### Flip Three
+
+* Target player must draw **three cards consecutively**, one at a time
+* Stop early if:
+
+  * The player busts, or
+  * The player achieves Flip 7
+
+Special handling:
+
+* Action, Modifier, and Number cards all count toward the three flips
+* If a **Second Chance** card appears, set it aside for later use
+* If another **Freeze** or **Flip Three** appears:
+
+  * Resolve it **after** all three cards are drawn
+  * Only if the player has not busted
+
+### Second Chance
+
+* Keep this card in front of you
+* If you draw a duplicate Number card:
+
+  * Discard the duplicate **and** the Second Chance card instead of busting
+* Restrictions:
+
+  * A player may have **only one** Second Chance at a time
+  * If dealt another Second Chance:
+
+    * Give it to another active player
+    * If none are eligible, discard it
+* All Second Chance cards are discarded at the **end of the round**, used or not
+
+---
+
+## Score Modifier Cards
+
+### General Rules
+
+* Modifier cards are **not Number cards**
+* They **cannot cause a bust**
+* You may end a round with **only Modifier cards** and still score points
+  **Exception:** x2 cards score nothing without Number cards
+
+### +X Cards
+
+* Add the shown value to the sum of your Number cards
+
+### x2 Cards
+
+* Double the sum of your Number cards
+* Order of operations:
+
+  1. Add Number cards
+  2. Apply x2
+  3. Add +X modifiers
+
+---
+
+## End of a Round
+
+A round ends when **either**:
+
+1. There are **no active players** (everyone has busted or stayed), or
+2. A player achieves **Flip 7**
+
+Inactive players should flip their cards face down until scoring.
+
+---
+
+## Scoring a Round
+
+For each non-busted player:
+
+1. Add all Number card values
+2. Apply x2 multiplier (if present)
+3. Add all +X modifier bonuses
+4. Add **15 points** if Flip 7 was achieved
+
+---
+
+## Starting the Next Round
+
+1. Set all cards from the round aside (do **not** shuffle them back yet)
+2. Pass the remaining deck to the left; that player becomes the new Dealer
+3. When the deck runs out:
+
+   * Shuffle all discarded cards to form a new deck
+4. If reshuffling mid-round:
+
+   * Leave all cards in front of players exactly as they are
+
+---
+
+## End of the Game
+
+* When at least one player reaches **200 points** at the end of a round:
+
+  * The player with the **highest total score wins**
+
+---
+
+If you want, I can also provide:
+
+* A one-page **rules reference**
+* A **turn-order flowchart**
+* A **developer-clean ruleset** suitable for implementing the game digitally
+* Clarifications on edge cases or probability analysis
+
+Just say which you want.

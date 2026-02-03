@@ -1,0 +1,21 @@
+{
+  "name": "@workspace/database",
+  "version": "0.0.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "dev": "tsc --watch",
+    "build": "tsc",
+    "types:generate": "pnpm dlx supabase gen types typescript --project-id aiqgkqhdtwnhnuhuuaij --schema public > ./src/database.types.ts",
+    "cron:generate": "pnpm dlx supabase gen types typescript --project-id aiqgkqhdtwnhnuhuuaij --schema cron > ./src/cron.types.ts",
+    "clean": "rm -rf dist .turbo node_modules"
+  },
+  "devDependencies": {
+    "@workspace/typescript-config": "workspace:*",
+    "typescript": "^5.7.3"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  }
+}
