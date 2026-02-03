@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
+import type { RealtimeChannel } from "@supabase/supabase-js";
 import { Button } from "@workspace/ui/components/button";
 import {
   Drawer,
@@ -12,10 +13,11 @@ import {
   DrawerTrigger,
 } from "@workspace/ui/components/drawer";
 import { Users } from "lucide-react";
-import { createClient } from "@/utils/supabase/client";
 import { AppHeader } from "@/components/app-header";
 import { GameCardGrid } from "@/components/game-card-grid";
 import { GameScoreDisplay } from "@/components/game-score-display";
+import { SessionGate } from "@/components/session-gate";
+import { useAnonSession } from "@/hooks/use-anon-session";
 
 type GameState = "loading" | "ready" | "error";
 
@@ -142,12 +144,16 @@ export default function GamePage() {
   >([]);
   const [totals, setTotals] = useState<TotalScore[]>([]);
   const [isRematchStarting, setIsRematchStarting] = useState(false);
+  const {
+    session,
+    error: sessionError,
+    loading: sessionLoading,
+    supabase: supabaseClient,
+  } = useAnonSession();
   const playersCountRef = useRef(0);
   const currentPlayerIdRef = useRef("");
   const currentRoundIdRef = useRef("");
-  const channelRef = useRef<
-    ReturnType<ReturnType<typeof createClient>["channel"]> | null
-  >(null);
+  const channelRef = useRef<RealtimeChannel | null>(null);
   const code = typeof params.code === "string" ? params.code.toUpperCase() : "";
 
   useEffect(() => {
@@ -163,20 +169,10 @@ export default function GamePage() {
   }, [currentRoundId]);
 
   useEffect(() => {
-    if (!code) return;
-    const supabase = createClient();
+    if (!code || sessionLoading) return;
+    const supabase = supabaseClient;
 
     const init = async () => {
-      const { data: sessionData } = await supabase.auth.getSession();
-      if (!sessionData.session) {
-        const { error: authError } = await supabase.auth.signInAnonymously();
-        if (authError) {
-          setState("error");
-          setError(authError.message);
-          return;
-        }
-      }
-
       const { data: gameData } = await supabase.rpc("get_game_by_code", {
         p_code: code,
       });
@@ -217,11 +213,11 @@ export default function GamePage() {
     };
 
     init();
-  }, [code, router]);
+  }, [code, router, sessionLoading, supabaseClient]);
 
   useEffect(() => {
     if (!gameId || !currentPlayerId) return;
-    const supabase = createClient();
+    const supabase = supabaseClient;
     let channel: ReturnType<typeof supabase.channel> | null = null;
 
     const subscribe = () => {
@@ -320,25 +316,25 @@ export default function GamePage() {
       }
       channelRef.current = null;
     };
-  }, [gameId, currentPlayerId, currentRoundId, router]);
+  }, [gameId, currentPlayerId, currentRoundId, router, supabaseClient]);
 
   useEffect(() => {
     if (!gameId || !currentRoundId || allSubmitted) return;
-    const supabase = createClient();
+    const supabase = supabaseClient;
     const interval = setInterval(() => {
       refreshRoundState(supabase);
     }, 3000);
     return () => clearInterval(interval);
-  }, [allSubmitted, currentRoundId, gameId]);
+  }, [allSubmitted, currentRoundId, gameId, supabaseClient]);
 
   useEffect(() => {
     if (!gameId || !allSubmitted) return;
-    const supabase = createClient();
+    const supabase = supabaseClient;
     const interval = setInterval(() => {
       loadCurrentRound(gameId, supabase);
     }, 4000);
     return () => clearInterval(interval);
-  }, [allSubmitted, gameId]);
+  }, [allSubmitted, gameId, supabaseClient]);
 
   useEffect(() => {
     const { body, documentElement } = document;
@@ -355,7 +351,7 @@ export default function GamePage() {
   const loadPlayers = async (
     id: string,
     playerId: string,
-    supabase = createClient(),
+    supabase = supabaseClient,
   ) => {
     const { data: playersData } = await supabase
       .from("players")
@@ -369,7 +365,7 @@ export default function GamePage() {
     }
   };
 
-  const loadCurrentRound = async (id: string, supabase = createClient()) => {
+  const loadCurrentRound = async (id: string, supabase = supabaseClient) => {
     const { data: roundData } = await supabase.rpc("get_current_round", {
       p_game_id: id,
     });
@@ -393,7 +389,7 @@ export default function GamePage() {
   };
 
   const refreshRoundState = async (
-    supabase = createClient(),
+    supabase = supabaseClient,
     roundId = currentRoundId,
   ) => {
     if (!gameId || !roundId) return;
@@ -498,7 +494,7 @@ export default function GamePage() {
       });
       return;
     }
-    const supabase = createClient();
+    const supabase = supabaseClient;
     const { total, isFlip7Bonus } = getScoreTotal(selectedCards);
     const { error: submitError } = await supabase.rpc("submit_score", {
       p_round_id: currentRoundId,
@@ -518,7 +514,7 @@ export default function GamePage() {
 
   const handleNextRound = async () => {
     if (!gameId) return;
-    const supabase = createClient();
+    const supabase = supabaseClient;
     const { error: roundError } = await supabase.rpc("create_round", {
       p_game_id: gameId,
     });
@@ -542,7 +538,7 @@ export default function GamePage() {
 
   const handleBustPlayer = async (playerId: string) => {
     if (!currentPlayerId || currentPlayerId !== hostPlayerId) return;
-    const supabase = createClient();
+    const supabase = supabaseClient;
     const { error: updateError } = await supabase
       .from("players")
       .update({ status: "busted" })
@@ -555,7 +551,7 @@ export default function GamePage() {
 
   const handleFreezePlayer = async (playerId: string) => {
     if (!currentPlayerId || currentPlayerId !== hostPlayerId) return;
-    const supabase = createClient();
+    const supabase = supabaseClient;
     const { error: updateError } = await supabase
       .from("players")
       .update({ status: "frozen" })
@@ -569,7 +565,7 @@ export default function GamePage() {
   const handlePlayAgain = async () => {
     if (!gameId || !isHost || isRematchStarting) return;
     setIsRematchStarting(true);
-    const supabase = createClient();
+    const supabase = supabaseClient;
     const { data, error: rematchError } = await supabase.rpc(
       "create_rematch_game",
       {
@@ -585,8 +581,7 @@ export default function GamePage() {
     }
 
     const rematch = data[0];
-    const { data: sessionData } = await supabase.auth.getSession();
-    const userId = sessionData.session?.user.id;
+    const userId = session?.user.id;
 
     if (userId) {
       const { data: rematchPlayer } = await supabase
@@ -658,6 +653,7 @@ export default function GamePage() {
     (player) => player.id === currentPlayerId,
   )?.status;
   return (
+    <SessionGate loading={sessionLoading} error={sessionError}>
     <main className="relative h-svh overflow-hidden bg-[#f7f2e7] pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] text-slate-900 dark:bg-slate-950 dark:text-slate-50">
       {currentStatus === "busted" && !isHost && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-[#ff3b52] text-center font-ballpill text-4xl font-bold uppercase tracking-[0.35em] text-white shadow-[inset_0_0_60px_rgba(0,0,0,0.25)] sm:text-5xl">
@@ -1165,5 +1161,6 @@ export default function GamePage() {
         }
       `}</style>
     </main>
+    </SessionGate>
   );
 }

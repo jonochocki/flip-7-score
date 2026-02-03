@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import { Button } from "@workspace/ui/components/button";
 import { Input } from "@workspace/ui/components/input";
 import { Label } from "@workspace/ui/components/label";
-import { createClient } from "@/utils/supabase/client";
+import { SessionGate } from "@/components/session-gate";
+import { useAnonSession } from "@/hooks/use-anon-session";
 
 type InitState = "idle" | "creating" | "ready" | "error";
 type StoredHostLobby = {
@@ -22,24 +23,26 @@ export default function StartPage() {
   const [hostName, setHostName] = useState<string>("");
   const hasInitialized = useRef(false);
   const router = useRouter();
+  const {
+    error: sessionError,
+    loading: sessionLoading,
+    supabase: supabaseClient,
+  } = useAnonSession();
 
   useEffect(() => {
     if (hasInitialized.current) return;
+    if (sessionLoading) return;
+    if (sessionError) {
+      setState("error");
+      setError(sessionError);
+      hasInitialized.current = true;
+      return;
+    }
     hasInitialized.current = true;
 
     const initGame = async () => {
       setState("creating");
-      const supabase = createClient();
-
-      const { data: sessionData } = await supabase.auth.getSession();
-      if (!sessionData.session) {
-        const { error: authError } = await supabase.auth.signInAnonymously();
-        if (authError) {
-          setState("error");
-          setError(authError.message);
-          return;
-        }
-      }
+      const supabase = supabaseClient;
 
       const stored =
         typeof window !== "undefined"
@@ -105,11 +108,11 @@ export default function StartPage() {
     };
 
     initGame();
-  }, []);
+  }, [sessionError, sessionLoading, supabaseClient]);
 
   const handleSubmit = async () => {
     if (!hostName.trim()) return;
-    const supabase = createClient();
+    const supabase = supabaseClient;
 
     const { error: updateError } = await supabase
       .from("players")
@@ -126,6 +129,7 @@ export default function StartPage() {
   };
 
   return (
+    <SessionGate loading={sessionLoading} error={sessionError}>
     <main className="relative min-h-svh overflow-hidden bg-[#f7f2e7] text-slate-900 dark:bg-slate-950 dark:text-slate-50">
       <div className="pointer-events-none absolute -top-24 left-1/2 h-80 w-80 -translate-x-1/2 rounded-full bg-[radial-gradient(circle_at_center,rgba(255,86,120,0.45),transparent_65%)] blur-2xl" />
       <div className="pointer-events-none absolute -bottom-32 right-0 h-96 w-96 rounded-full bg-[radial-gradient(circle_at_center,rgba(70,210,255,0.55),transparent_65%)] blur-3xl" />
@@ -218,5 +222,6 @@ export default function StartPage() {
         </div>
       </div>
     </main>
+    </SessionGate>
   );
 }

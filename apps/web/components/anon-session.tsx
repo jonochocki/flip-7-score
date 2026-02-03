@@ -1,47 +1,41 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { createClient } from "@/utils/supabase/client";
-
-type Status = "idle" | "signing-in" | "ready" | "error";
+import { useMemo } from "react";
+import { useAnonSession } from "@/hooks/use-anon-session";
 
 export function AnonSession() {
-  const [status, setStatus] = useState<Status>("idle");
-  const [message, setMessage] = useState<string>("");
-
-  useEffect(() => {
-    const supabase = createClient();
-
-    const ensureSession = async () => {
-      setStatus("signing-in");
-      const { data: sessionData } = await supabase.auth.getSession();
-
-      if (sessionData.session) {
-        setStatus("ready");
-        setMessage("Anonymous session active.");
-        return;
-      }
-
-      const { error } = await supabase.auth.signInAnonymously();
-      if (error) {
-        setStatus("error");
-        setMessage(error.message);
-        return;
-      }
-
-      setStatus("ready");
-      setMessage("Anonymous session created.");
-    };
-
-    ensureSession();
-  }, []);
+  const {
+    session,
+    error,
+    loading,
+    status,
+    attempts,
+    maxAttempts,
+    sessionOrigin,
+  } = useAnonSession();
+  const message = useMemo(() => {
+    if (status === "timeout") return "Session setup timed out. Try again.";
+    if (loading) return "Signing in...";
+    if (error) return error;
+    if (session && sessionOrigin === "existing")
+      return "Anonymous session active (existing).";
+    if (session && sessionOrigin === "new")
+      return "Anonymous session created.";
+    if (session) return "Anonymous session active.";
+    return "Anonymous session unavailable.";
+  }, [error, loading, session, sessionOrigin, status]);
 
   return (
     <div className="rounded border px-4 py-3 text-sm">
       <p className="font-medium">Session</p>
       <p className="text-muted-foreground">
-        {status === "signing-in" ? "Signing in..." : message}
+        {message}
       </p>
+      {status === "retrying" ? (
+        <p className="mt-1 text-xs text-muted-foreground">
+          Retry {attempts} of {maxAttempts}...
+        </p>
+      ) : null}
     </div>
   );
 }

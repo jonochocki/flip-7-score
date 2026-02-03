@@ -13,8 +13,9 @@ import {
 } from "@workspace/ui/components/dialog";
 import { Input } from "@workspace/ui/components/input";
 import { Label } from "@workspace/ui/components/label";
-import { createClient } from "@/utils/supabase/client";
 import { AppHeader } from "@/components/app-header";
+import { SessionGate } from "@/components/session-gate";
+import { useAnonSession } from "@/hooks/use-anon-session";
 
 type Mode = "idle" | "join";
 type StoredHostLobby = {
@@ -31,22 +32,28 @@ export default function Page() {
   const [createError, setCreateError] = useState("");
   const [isCreating, setIsCreating] = useState(false);
   const router = useRouter();
+  const {
+    error: sessionError,
+    loading: sessionLoading,
+    supabase: supabaseClient,
+  } = useAnonSession();
 
   const handleCreateLobby = async () => {
     if (!hostName.trim() || isCreating) return;
     setCreateError("");
     setIsCreating(true);
-
-    const supabase = createClient();
-    const { data: sessionData } = await supabase.auth.getSession();
-    if (!sessionData.session) {
-      const { error: authError } = await supabase.auth.signInAnonymously();
-      if (authError) {
-        setCreateError(authError.message);
-        setIsCreating(false);
-        return;
-      }
+    if (sessionLoading) {
+      setCreateError("Setting up your session. Try again in a moment.");
+      setIsCreating(false);
+      return;
     }
+    if (sessionError) {
+      setCreateError(sessionError);
+      setIsCreating(false);
+      return;
+    }
+
+    const supabase = supabaseClient;
 
     const stored =
       typeof window !== "undefined"
@@ -111,6 +118,7 @@ export default function Page() {
   };
 
   return (
+    <SessionGate loading={sessionLoading} error={sessionError}>
     <main className="relative min-h-svh overflow-hidden bg-[#f7f2e7] text-slate-900 dark:bg-slate-950 dark:text-slate-50">
       <div className="pointer-events-none absolute -top-24 left-1/2 h-80 w-80 -translate-x-1/2 rounded-full bg-[radial-gradient(circle_at_center,rgba(255,86,120,0.45),transparent_65%)] blur-2xl" />
       <div className="pointer-events-none absolute -bottom-32 right-0 h-96 w-96 rounded-full bg-[radial-gradient(circle_at_center,rgba(70,210,255,0.55),transparent_65%)] blur-3xl" />
@@ -259,5 +267,6 @@ export default function Page() {
         </DialogContent>
       </Dialog>
     </main>
+    </SessionGate>
   );
 }
