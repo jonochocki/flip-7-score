@@ -4,12 +4,16 @@ type GameScoreDisplayProps = {
   score: number;
   isFlip7Bonus?: boolean;
   size?: "default" | "large";
+  textClassName?: string;
+  numberScaleClassName?: string;
 };
 
 export function GameScoreDisplay({
   score,
   isFlip7Bonus = false,
   size = "default",
+  textClassName,
+  numberScaleClassName,
 }: GameScoreDisplayProps) {
   const sizeClasses =
     size === "large"
@@ -87,13 +91,14 @@ export function GameScoreDisplay({
           </svg>
         <div className="absolute inset-0 flex items-center justify-center">
           <div
-            className={`font-ballpill ${textClasses} font-bold ${
-              isFlip7Bonus
+            className={`font-atkinson ${textClasses} font-bold ${
+              textClassName ??
+              (isFlip7Bonus
                 ? "text-white dark:text-black"
-                : "text-black dark:text-[#7ce7ff]"
+                : "text-black dark:text-[#7ce7ff]")
             }`}
           >
-            {score}
+            <span className={numberScaleClassName}>{score}</span>
           </div>
         </div>
       </div>
@@ -107,7 +112,6 @@ export function GameScoreDisplay({
         .bonus-inactive {
           opacity: 0;
           transform: scale(0.9);
-          animation: bonus-out 200ms ease-in forwards;
           pointer-events: none;
         }
 
@@ -122,16 +126,6 @@ export function GameScoreDisplay({
           }
         }
 
-        @keyframes bonus-out {
-          from {
-            opacity: 1;
-            transform: scale(1);
-          }
-          to {
-            opacity: 0;
-            transform: scale(0.9);
-          }
-        }
       `}</style>
     </div>
   );

@@ -1,20 +1,29 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Button } from "@workspace/ui/components/button";
+import * as motion from "motion/react-client";
+import {
+  Drawer,
+  DrawerContent,
+  DrawerFooter,
+  DrawerTitle,
+} from "@workspace/ui/components/drawer";
 import { Input } from "@workspace/ui/components/input";
 import { Label } from "@workspace/ui/components/label";
+import { QrCode } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { AppHeader } from "@/components/app-header";
 import { SessionGate } from "@/components/session-gate";
 import {
-  AVATAR_SIZE,
   getAvatarClass,
-  getInitials,
+  getAvatarLabel,
 } from "@/components/lobby-player-bubbles";
+import { type LayoutMode } from "@/components/lobby-orbit-layout";
 import { LobbyPlayerOrbit } from "@/components/lobby-player-orbit";
 import { useAnonSession } from "@/hooks/use-anon-session";
+import { useRealtimeChannel } from "@/hooks/use-realtime-channel";
 
 type LobbyState = "loading" | "needs-name" | "joining" | "ready" | "error";
 type StoredPlayer = {
@@ -25,7 +34,64 @@ type StoredPlayer = {
 type Player = {
   id: string;
   name: string;
+  avatar?: string | null;
+  color?: string | null;
 };
+
+type StoredProfile = {
+  name: string;
+  avatar: string | null;
+  color: string | null;
+};
+
+const RULES_SECTIONS = [
+  {
+    title: "Goal",
+    body: "Be first to 200 points.",
+  },
+  {
+    title: "Round Flow",
+    body: [
+      "Everyone gets 1 card face up (resolve any Action cards immediately).",
+      "On your turn: Hit (draw 1) or Stay (bank points).",
+    ],
+  },
+  {
+    title: "Bust",
+    body: "Draw a number you already have → bust (0 points this round).",
+  },
+  {
+    title: "7 Bonus",
+    body: "7 unique numbers showing ends the round and gives +15 points.",
+  },
+  {
+    title: "Action Cards",
+    body: [
+      "Freeze: target banks points and is out.",
+      "Flip Three: target draws 3 cards (stop early on bust or Flip 7).",
+      "Second Chance: discard one duplicate + this card instead of busting (only one per player).",
+    ],
+  },
+  {
+    title: "Scoring Order",
+    body: ["Add numbers.", "Apply x2 (if any).", "Add +X modifiers."],
+  },
+];
+
+const LobbySessionLoading = () => (
+  <main className="relative min-h-svh overflow-hidden bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50 text-slate-900">
+    <div className="pointer-events-none absolute inset-0 opacity-40 [background-image:radial-gradient(circle_at_2px_2px,rgba(79,70,229,0.18)_2px,transparent_0)] [background-size:24px_24px]" />
+    <div className="pointer-events-none absolute -top-24 left-1/2 h-80 w-80 -translate-x-1/2 rounded-full bg-gradient-to-tr from-[#ff99b8]/40 to-[#ffd966]/40 blur-3xl" />
+    <div className="pointer-events-none absolute -bottom-32 right-0 h-96 w-96 rounded-full bg-gradient-to-bl from-[#66e0ff]/40 to-[#ff99b8]/40 blur-3xl" />
+    <div className="relative mx-auto flex min-h-svh w-full max-w-5xl flex-col items-center justify-center gap-6 px-5 pb-24 pt-6 sm:px-10 sm:pb-28 sm:pt-10 lg:px-16">
+      <div className="rounded-full bg-gradient-to-r from-[#ff8cc3] via-[#ffd966] to-[#66e0ff] p-[3px] shadow-[0_18px_40px_-18px_rgba(255,107,153,0.5)]">
+        <div className="rounded-full bg-white/95 px-6 py-3 text-sm font-black uppercase tracking-[0.25em] text-slate-900 shadow-[inset_0_2px_0_rgba(255,255,255,0.9)]">
+          Setting up lobby...
+        </div>
+      </div>
+    </div>
+  </main>
+);
 
 export default function LobbyPage() {
   const params = useParams<{ code: string }>();
@@ -38,6 +104,15 @@ export default function LobbyPage() {
   const [currentPlayerId, setCurrentPlayerId] = useState("");
   const [hostPlayerId, setHostPlayerId] = useState("");
   const [isStarting, setIsStarting] = useState(false);
+  const [isHostDrawerOpen, setIsHostDrawerOpen] = useState(true);
+  const [isRulesDrawerOpen, setIsRulesDrawerOpen] = useState(false);
+  const [qrSize, setQrSize] = useState(260);
+  const [isProfileDrawerOpen, setIsProfileDrawerOpen] = useState(false);
+  const [profileName, setProfileName] = useState("");
+  const [profileAvatar, setProfileAvatar] = useState<string | null>(null);
+  const [profileColor, setProfileColor] = useState<string | null>(null);
+  const [hasStoredProfile, setHasStoredProfile] = useState(false);
+  const [layoutMode, setLayoutMode] = useState<LayoutMode>("orbit");
   const {
     session,
     error: sessionError,
@@ -93,7 +168,9 @@ export default function LobbyPage() {
       const storedKey = `flip7_player_${code}`;
       const stored =
         typeof window !== "undefined"
-          ? (localStorage.getItem(storedKey) ?? "")
+          ? sessionStorage.getItem(storedKey) ??
+            localStorage.getItem(storedKey) ??
+            ""
           : "";
       if (stored) {
         try {
@@ -112,9 +189,14 @@ export default function LobbyPage() {
             }
           }
         } catch {
-          // Ignore invalid local storage entries.
+          // Ignore invalid storage entries.
         }
-        localStorage.removeItem(storedKey);
+        try {
+          sessionStorage.removeItem(storedKey);
+          localStorage.removeItem(storedKey);
+        } catch {
+          // Ignore storage failures.
+        }
       }
 
       const userId = session?.user.id;
@@ -129,19 +211,28 @@ export default function LobbyPage() {
         if (existingPlayer?.id) {
           setCurrentPlayerId(existingPlayer.id);
           await loadPlayers(game.id, supabase);
-          localStorage.setItem(
-            storedKey,
-            JSON.stringify({ gameId: game.id, playerId: existingPlayer.id }),
-          );
+          try {
+            const value = JSON.stringify({
+              gameId: game.id,
+              playerId: existingPlayer.id,
+            });
+            sessionStorage.setItem(storedKey, value);
+            localStorage.setItem(storedKey, value);
+          } catch {
+            // Ignore storage failures.
+          }
           if (existingPlayer.id === hostData?.host_player_id) {
-            localStorage.setItem(
-              "flip7_host_lobby",
-              JSON.stringify({
+            try {
+              const hostValue = JSON.stringify({
                 gameId: game.id,
                 code,
                 playerId: existingPlayer.id,
-              }),
-            );
+              });
+              sessionStorage.setItem("flip7_host_lobby", hostValue);
+              localStorage.setItem("flip7_host_lobby", hostValue);
+            } catch {
+              // Ignore storage failures.
+            }
           }
           setState("ready");
           return;
@@ -154,35 +245,45 @@ export default function LobbyPage() {
     init();
   }, [code, router, session, sessionLoading, supabaseClient]);
 
-  useEffect(() => {
-    if (!gameId || !currentPlayerId) return;
-    const supabase = supabaseClient;
+  const loadPlayers = useCallback(
+    async (id: string, supabase = supabaseClient) => {
+      const { data: playersData } = await supabase
+        .from("players")
+        .select("id, name, avatar, color")
+        .eq("game_id", id)
+        .order("seat_order", { ascending: true });
 
-    const channel = supabase
-      .channel(`lobby:${gameId}`)
-      .on(
-        "postgres_changes",
-        {
+      if (playersData) {
+        setPlayers(playersData);
+      }
+    },
+    [supabaseClient],
+  );
+
+  const lobbyPostgresHandlers = useMemo(() => {
+    if (!gameId || !currentPlayerId) return [];
+    return [
+      {
+        filter: {
           event: "*",
           schema: "public",
           table: "players",
           filter: `game_id=eq.${gameId}`,
         },
-        () => {
+        onChange: async () => {
           console.info("[lobby] players updated, refreshing");
-          loadPlayers(gameId, supabase);
+          await loadPlayers(gameId, supabaseClient);
         },
-      )
-      .on(
-        "postgres_changes",
-        {
+      },
+      {
+        filter: {
           event: "UPDATE",
           schema: "public",
           table: "games",
           filter: `id=eq.${gameId}`,
         },
-        async () => {
-          const { data: game } = await supabase
+        onChange: async () => {
+          const { data: game } = await supabaseClient
             .from("games")
             .select("status, host_player_id")
             .eq("id", gameId)
@@ -195,38 +296,89 @@ export default function LobbyPage() {
             router.replace(`/game/${code}`);
           }
         },
-      )
-      .subscribe((status) => {
+      },
+    ];
+  }, [code, currentPlayerId, gameId, loadPlayers, router, supabaseClient]);
+
+  useRealtimeChannel({
+    supabase: supabaseClient,
+    key: gameId ? `lobby:${gameId}` : "",
+    enabled: !!gameId && !!currentPlayerId,
+    postgres: lobbyPostgresHandlers,
+    onStatusChange: (status) => {
+      if (status === "SUBSCRIBED") {
         console.info("[lobby] channel status:", status);
-      });
+      }
+    },
+    onError: (status) => {
+      console.warn("[lobby] realtime issue, resubscribing", status);
+    },
+  });
 
-    return () => {
-      supabase.removeChannel(channel);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const updateSize = () => {
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      const next = Math.min(
+        360,
+        Math.max(220, Math.floor(Math.min(width * 0.8, height * 0.6))),
+      );
+      setQrSize(next);
     };
-  }, [code, currentPlayerId, gameId, router, supabaseClient]);
 
-  const loadPlayers = async (id: string, supabase = supabaseClient) => {
-    const { data: playersData } = await supabase
-      .from("players")
-      .select("id, name")
-      .eq("game_id", id)
-      .order("seat_order", { ascending: true });
+    updateSize();
+    window.addEventListener("resize", updateSize);
+    return () => window.removeEventListener("resize", updateSize);
+  }, []);
 
-    if (playersData) {
-      setPlayers(playersData);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const stored =
+      sessionStorage.getItem("7score_profile") ??
+      localStorage.getItem("7score_profile") ??
+      sessionStorage.getItem("flip7_profile") ??
+      localStorage.getItem("flip7_profile");
+    if (!stored) return;
+    try {
+      const parsed = JSON.parse(stored) as StoredProfile;
+      if (parsed?.name) {
+        setProfileName(parsed.name);
+        setProfileAvatar(parsed.avatar ?? null);
+        setProfileColor(parsed.color ?? null);
+        setHasStoredProfile(true);
+        const nextValue = JSON.stringify({
+          name: parsed.name,
+          avatar: parsed.avatar ?? null,
+          color: parsed.color ?? null,
+        } satisfies StoredProfile);
+        sessionStorage.setItem("7score_profile", nextValue);
+        localStorage.setItem("7score_profile", nextValue);
+      }
+    } catch {
+      try {
+        sessionStorage.removeItem("7score_profile");
+        localStorage.removeItem("7score_profile");
+        sessionStorage.removeItem("flip7_profile");
+        localStorage.removeItem("flip7_profile");
+      } catch {
+        // Ignore storage failures.
+      }
     }
-  };
+  }, []);
 
   const handleJoin = async () => {
-    if (!name.trim()) return;
+    const nextName = profileName.trim();
+    if (!nextName) return;
     setState("joining");
     const supabase = supabaseClient;
 
     const { data, error: joinError } = await supabase.rpc("join_game", {
       p_code: code,
-      p_name: name.trim(),
-      p_avatar: null,
-      p_color: null,
+      p_name: nextName,
+      p_avatar: profileAvatar,
+      p_color: profileColor,
     });
 
     if (joinError || !data?.length) {
@@ -237,17 +389,30 @@ export default function LobbyPage() {
 
     const { game_id, player_id } = data[0];
     await loadPlayers(game_id, supabase);
-    localStorage.setItem(
-      `flip7_player_${code}`,
-      JSON.stringify({ gameId: game_id, playerId: player_id }),
-    );
+    try {
+      const playerValue = JSON.stringify({
+        gameId: game_id,
+        playerId: player_id,
+      });
+      sessionStorage.setItem(`flip7_player_${code}`, playerValue);
+      localStorage.setItem(`flip7_player_${code}`, playerValue);
+      const profileValue = JSON.stringify({
+        name: nextName,
+        avatar: profileAvatar ?? null,
+        color: profileColor ?? null,
+      } satisfies StoredProfile);
+      sessionStorage.setItem("7score_profile", profileValue);
+      localStorage.setItem("7score_profile", profileValue);
+    } catch {
+      // Ignore storage failures.
+    }
     setCurrentPlayerId(player_id);
     setGameId(game_id);
     setState("ready");
   };
 
   const currentPlayer = players.find((player) => player.id === currentPlayerId);
-  const isHost = currentPlayerId && hostPlayerId === currentPlayerId;
+  const isHost = !!currentPlayerId && hostPlayerId === currentPlayerId;
 
   const handleStartGame = async () => {
     if (!gameId || !isHost || players.length < 3) return;
@@ -275,159 +440,427 @@ export default function LobbyPage() {
     router.replace(`/game/${code}`);
   };
 
+  const openProfileDrawer = () => {
+    if (!currentPlayer) return;
+    setProfileName(currentPlayer.name ?? "");
+    setProfileAvatar(currentPlayer.avatar ?? null);
+    setProfileColor(currentPlayer.color ?? null);
+    setIsProfileDrawerOpen(true);
+  };
+
+  const handleSaveProfile = async () => {
+    if (!currentPlayerId) return;
+    const nextName = profileName.trim();
+    if (!nextName) return;
+
+    const supabase = supabaseClient;
+    const { error: updateError } = await supabase
+      .from("players")
+      .update({
+        name: nextName,
+        avatar: profileAvatar,
+        color: profileColor,
+      })
+      .eq("id", currentPlayerId);
+    if (updateError) {
+      setError(updateError.message);
+      setState("error");
+      return;
+    }
+
+    setPlayers((prev) =>
+      prev.map((player) =>
+        player.id === currentPlayerId
+          ? {
+              ...player,
+              name: nextName,
+              avatar: profileAvatar,
+              color: profileColor,
+            }
+          : player,
+      ),
+    );
+    try {
+      const profileValue = JSON.stringify({
+        name: nextName,
+        avatar: profileAvatar ?? null,
+        color: profileColor ?? null,
+      } satisfies StoredProfile);
+      sessionStorage.setItem("7score_profile", profileValue);
+      localStorage.setItem("7score_profile", profileValue);
+    } catch {
+      // Ignore storage failures.
+    }
+    setIsProfileDrawerOpen(false);
+  };
+
+  const handleEditProfile = () => {
+    setProfileName("");
+    setProfileAvatar(null);
+    setProfileColor(null);
+    setHasStoredProfile(false);
+    try {
+      sessionStorage.removeItem("7score_profile");
+      localStorage.removeItem("7score_profile");
+      sessionStorage.removeItem("flip7_profile");
+      localStorage.removeItem("flip7_profile");
+    } catch {
+      // Ignore storage failures.
+    }
+  };
+
+  const avatarOptions = ["😎", "🤠", "🦊", "🐼", "🦄", "🐙", "⭐️", "👾"];
+  const colorOptions = [
+    { key: "pink", label: "Pink" },
+    { key: "orange", label: "Orange" },
+    { key: "blue", label: "Blue" },
+    { key: "teal", label: "Teal" },
+    { key: "purple", label: "Purple" },
+    { key: "magenta", label: "Magenta" },
+    { key: "yellow", label: "Yellow" },
+    { key: "cyan", label: "Cyan" },
+  ];
+
+  const hostName =
+    players.find((player) => player.id === hostPlayerId)?.name ?? "the host";
+
   return (
-    <SessionGate loading={sessionLoading} error={sessionError}>
-      <main className="relative min-h-svh overflow-hidden bg-[#f7f2e7] text-slate-900 dark:bg-slate-950 dark:text-slate-50">
-      <div className="pointer-events-none absolute -top-24 left-1/2 h-80 w-80 -translate-x-1/2 rounded-full bg-[radial-gradient(circle_at_center,rgba(255,86,120,0.45),transparent_65%)] blur-2xl" />
-      <div className="pointer-events-none absolute -bottom-32 right-0 h-96 w-96 rounded-full bg-[radial-gradient(circle_at_center,rgba(70,210,255,0.55),transparent_65%)] blur-3xl" />
-      <div className="pointer-events-none absolute left-12 top-20 hidden h-32 w-32 rotate-6 rounded-3xl border-[3px] border-[#1f2b7a]/60 bg-white/70 shadow-[0_20px_45px_rgba(31,43,122,0.25)] lg:block dark:border-[#7ce7ff]/70 dark:bg-slate-900/60" />
-
-      <div className="relative mx-auto flex w-full max-w-5xl flex-col gap-8 px-6 py-10 sm:py-14">
-        <AppHeader />
-        <header className="flex flex-col gap-6 rounded-[28px] border-[3px] border-[#1f2b7a] bg-white/85 p-6 shadow-[0_25px_60px_rgba(31,43,122,0.28)] backdrop-blur dark:border-[#7ce7ff] dark:bg-slate-900/80 sm:p-8">
-          <div className="flex flex-wrap items-center justify-between gap-6">
-            <div className="space-y-2">
-              <p className="text-xs font-semibold uppercase tracking-[0.35em] text-[#ff4f70] dark:text-[#ff87a0]">
-                7 Score Lobby
-              </p>
-              <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
-                {isHost
-                  ? "Waiting for more players to join"
-                  : "Waiting for the game to start"}
-              </h1>
-              <p className="text-sm text-slate-600 dark:text-slate-200">
-                {isHost
-                  ? "Invite at least three players before starting."
-                  : "Hang tight while the host gets the lobby ready."}
-              </p>
-            </div>
-            {isHost && (
-              <div className="rounded-full border-2 border-[#1f2b7a] bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.3em] text-[#1f2b7a] shadow-[0_10px_18px_rgba(31,43,122,0.2)] dark:border-[#7ce7ff] dark:bg-slate-950/70 dark:text-[#7ce7ff]">
-                Code: <span className="font-semibold">{code || "----"}</span>
-              </div>
-            )}
-          </div>
-        </header>
-
-        {state === "loading" && (
-          <div className="rounded-2xl border-2 border-[#1f2b7a]/40 bg-white/80 px-4 py-3 text-sm font-semibold uppercase tracking-[0.2em] text-[#1f2b7a] shadow-[0_12px_25px_-18px_rgba(31,43,122,0.25)] dark:border-[#7ce7ff]/60 dark:bg-slate-950/70 dark:text-[#7ce7ff]">
-            Loading lobby...
-          </div>
-        )}
-
-        {state === "error" && (
-          <div className="rounded-2xl border-2 border-[#ff4f70] bg-[#ff4f70]/10 px-4 py-3 text-sm text-[#a51f3b] dark:border-[#ff87a0] dark:bg-[#ff87a0]/10 dark:text-[#ffd1db]">
-            {error || "Something went wrong."}
-          </div>
-        )}
-
-        {state === "needs-name" && (
-          <section className="rounded-[28px] border-[3px] border-[#1f2b7a] bg-white/85 p-6 shadow-[0_25px_60px_rgba(31,43,122,0.28)] backdrop-blur dark:border-[#7ce7ff] dark:bg-slate-900/80 sm:p-8">
-            <div className="flex flex-col gap-3">
-              <Label
-                htmlFor="player-name"
-                className="text-xs font-semibold uppercase tracking-[0.25em] text-[#1f2b7a] dark:text-[#7ce7ff] sm:text-sm"
-              >
-                Your Name
-              </Label>
-              <Input
-                id="player-name"
-                placeholder="Enter your name"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                className="h-12 rounded-full border-2 border-[#1f2b7a] bg-white/90 text-base text-slate-900 shadow-[0_10px_20px_rgba(31,43,122,0.18)] placeholder:text-slate-500 focus-visible:ring-2 focus-visible:ring-[#ff4f70] dark:border-[#7ce7ff] dark:bg-slate-950/70 dark:text-slate-100 dark:placeholder:text-slate-400"
-              />
-              <p className="text-xs text-slate-600 dark:text-slate-300">
-                This is how others see you in the lobby.
-              </p>
-            </div>
-            <div className="mt-6">
-              <Button
-                onClick={handleJoin}
-                className="h-12 rounded-full border-2 border-[#1f2b7a] bg-gradient-to-r from-[#ff4f70] via-[#ffd04a] to-[#46d2ff] text-base font-semibold uppercase tracking-[0.2em] text-[#1f2b7a] shadow-[0_14px_25px_rgba(31,43,122,0.25)] hover:opacity-90 dark:border-[#7ce7ff] dark:text-slate-900"
-              >
-                Join Lobby
-              </Button>
-            </div>
-          </section>
-        )}
-
-        {state === "ready" && (
-          <section className="flex flex-col gap-8">
-            <div className="flex flex-wrap items-center justify-center gap-6 text-center">
-              <div className="flex flex-col items-center gap-4 sm:flex-row sm:text-left">
-                <div
-                  className={`flex items-center justify-center rounded-full text-xl font-semibold text-white shadow-lg ${getAvatarClass(
-                    currentPlayer?.id ?? currentPlayer?.name ?? "you",
-                  )}`}
-                  style={{
-                    width: AVATAR_SIZE,
-                    height: AVATAR_SIZE,
-                  }}
-                >
-                  {getInitials(currentPlayer?.name ?? "")}
-                </div>
-                <div>
-                  <h2 className="text-2xl font-semibold">
-                    {currentPlayer?.name ?? "Loading..."}
-                  </h2>
-                </div>
-              </div>
-              {currentPlayer?.id === hostPlayerId && (
-                <span className="rounded-full border-2 border-[#1f2b7a] bg-white/80 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-[#1f2b7a] shadow-[0_10px_18px_rgba(31,43,122,0.2)] dark:border-[#7ce7ff] dark:bg-slate-950/70 dark:text-[#7ce7ff]">
-                  Host
-                </span>
-              )}
-            </div>
-
-            {isHost && (
-              <div className="rounded-[28px] border-[3px] border-[#1f2b7a] bg-white/90 p-6 shadow-[0_25px_60px_rgba(31,43,122,0.28)] backdrop-blur dark:border-[#7ce7ff] dark:bg-slate-900/80">
-                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.3em] text-[#ff4f70] dark:text-[#ff87a0]">
-                      Lobby Code
-                    </p>
-                    <h3 className="mt-2 text-3xl font-semibold tracking-[0.35em] text-[#1f2b7a] dark:text-[#7ce7ff]">
-                      {code}
-                    </h3>
-                    <p className="mt-2 text-sm text-slate-600 dark:text-slate-200">
-                      Share the QR or the code so friends can join quickly.
-                    </p>
+    <SessionGate
+      loading={sessionLoading}
+      error={sessionError}
+      loadingFallback={<LobbySessionLoading />}
+    >
+      <main className="relative h-svh overflow-x-hidden overflow-y-auto pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] text-slate-900">
+        <div className="relative mx-auto flex min-h-svh w-full max-w-5xl flex-col gap-6 px-5 pb-24 pt-0 sm:px-10 sm:pb-28 lg:px-16">
+          <div className="sticky top-0 z-40 -mx-5 border-b border-white/20 bg-transparent px-5 py-4 backdrop-blur-lg sm:-mx-10 sm:px-10 md:py-3 lg:-mx-16 lg:px-16">
+            <AppHeader
+              onLeftClick={() => setIsRulesDrawerOpen(true)}
+              leftIcon="info"
+              rightSlot={
+                <div className="flex items-center gap-2 rounded-full border-2 border-[#1f2b7a] bg-white/90 pl-3 pr-1 py-1 shadow-[0_12px_24px_rgba(31,43,122,0.2)] backdrop-blur dark:border-[#7ce7ff]/50 dark:bg-slate-950/70 sm:gap-3">
+                  <div className="max-w-[120px] truncate text-xs font-semibold text-[#1f2b7a] dark:text-[#7ce7ff] sm:max-w-none sm:text-sm">
+                    {(currentPlayer?.name ?? "Loading...").slice(0, 15)}
                   </div>
-                  <div className="flex items-center justify-center rounded-2xl border-2 border-dashed border-[#1f2b7a]/60 bg-white p-4 shadow-[0_12px_25px_-18px_rgba(31,43,122,0.25)] dark:border-[#7ce7ff]/70">
-                    <QRCodeSVG
-                      value={`${publicUrl.replace(/\/$/, "")}/${code}`}
-                      size={200}
-                      bgColor="transparent"
-                      fgColor="#1f2b7a"
-                    />
+                  <div
+                    className={`flex items-center justify-center rounded-full text-sm font-semibold text-white shadow-lg ${getAvatarClass(
+                      currentPlayer?.id ?? currentPlayer?.name ?? "you",
+                      currentPlayer?.color,
+                    )}`}
+                    style={{ width: 36, height: 36 }}
+                  >
+                    {getAvatarLabel(
+                      currentPlayer?.name ?? "",
+                      currentPlayer?.avatar ?? null,
+                    )}
                   </div>
                 </div>
-              </div>
-            )}
-
-            <LobbyPlayerOrbit
-              players={players}
-              currentPlayerId={currentPlayerId}
-              hostPlayerId={hostPlayerId}
-              isHost={isHost}
+              }
             />
-          </section>
-        )}
-      </div>
-      {isHost && (
-        <div className="fixed inset-x-0 bottom-0 z-40 px-6 pb-6">
-          <div className="mx-auto w-full max-w-5xl">
-            <Button
-              onClick={handleStartGame}
-              disabled={isStarting || players.length < 3}
-              className="w-full rounded-full border-2 border-[#1f2b7a] bg-gradient-to-r from-[#ff4f70] via-[#ffd04a] to-[#46d2ff] text-base font-semibold uppercase tracking-[0.2em] text-[#1f2b7a] shadow-[0_14px_25px_rgba(31,43,122,0.25)] hover:opacity-90 disabled:opacity-70 dark:border-[#7ce7ff] dark:text-slate-900"
-            >
-              {isStarting ? "Starting..." : "Start Game"}
-            </Button>
+          </div>
+          <div className="pt-2 sm:pt-4">
+          {state !== "needs-name" && (
+            <header className="relative mx-auto w-full max-w-md pb-10 text-center">
+              <div className="relative rounded-[36px] bg-gradient-to-r from-[#ff8cc3] via-[#ffd966] to-[#66e0ff] p-[5px] shadow-[0_30px_65px_-18px_rgba(255,107,153,0.6)]">
+                <div className="relative rounded-[31px] bg-white/95 px-7 py-7 shadow-[inset_0_3px_0_rgba(255,255,255,0.9)] sm:px-8 sm:py-8">
+                  <div className="pointer-events-none absolute inset-0 rounded-[31px] bg-gradient-to-b from-white/90 via-white/35 to-transparent opacity-90" />
+                  <div className="pointer-events-none absolute left-5 right-5 top-3.5 h-4 rounded-full bg-white/75 blur-[1px]" />
+
+                  <div className="relative z-10 space-y-2">
+                    <h1 className="text-3xl font-black tracking-tight text-slate-900 sm:text-4xl">
+                      {isHost
+                        ? "Waiting for players..."
+                        : `Waiting on ${hostName} to start...`}
+                    </h1>
+                    <p className="text-base font-medium text-slate-600">
+                      {isHost
+                        ? "Invite at least three players to start."
+                        : "Hang tight! The game will begin shortly."}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </header>
+          )}
+
+          <div className="flex min-h-0 flex-1 flex-col gap-6">
+            {state === "loading" && (
+              <div className="flex flex-1 items-center justify-center">
+                <div className="rounded-full bg-gradient-to-r from-[#ff8cc3] via-[#ffd966] to-[#66e0ff] p-[3px] shadow-[0_18px_40px_-18px_rgba(255,107,153,0.5)]">
+                  <div className="rounded-full bg-white/95 px-6 py-3 text-sm font-black uppercase tracking-[0.25em] text-slate-900 shadow-[inset_0_2px_0_rgba(255,255,255,0.9)]">
+                    Loading Lobby...
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {state === "error" && (
+              <div className="rounded-2xl bg-[#ff6b99]/10 px-4 py-3 text-sm font-medium text-[#ff6b99] ring-4 ring-[#ff6b99]/20">
+                {error || "Something went wrong."}
+              </div>
+            )}
+
+            {state === "needs-name" && (
+              <div className="flex flex-1 items-center justify-center text-sm font-medium text-slate-500">
+                Choose your name and avatar below.
+              </div>
+            )}
+
+            {state === "ready" && (
+              <section className="flex min-h-0 flex-1 flex-col gap-4">
+                <LobbyPlayerOrbit
+                  players={players}
+                  currentPlayerId={currentPlayerId}
+                  hostPlayerId={hostPlayerId}
+                  isHost={isHost}
+                  onOpenProfile={openProfileDrawer}
+                  layoutMode={layoutMode}
+                />
+              </section>
+            )}
+          </div>
           </div>
         </div>
-      )}
+
+        {isHost && (
+          <>
+            <Drawer open={isHostDrawerOpen} onOpenChange={setIsHostDrawerOpen}>
+              <DrawerContent className="rounded-t-[32px] border-0 border-t-0 bg-white/95 p-6 pb-8 shadow-[0_20px_50px_rgba(255,107,153,0.2)] sm:p-8 [&>div:first-child]:hidden before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-[10px] before:rounded-t-[32px] before:bg-[linear-gradient(90deg,#ff6b99,#ffd966,#66e0ff,#a855f7,#ff6b99)]">
+                <div className="mx-auto flex w-full max-w-md flex-col items-center gap-4 text-center">
+                  <DrawerTitle className="sr-only">Lobby code</DrawerTitle>
+                  <div className="flex w-full flex-col items-center gap-4">
+                    <div className="flex w-full items-center justify-center rounded-3xl border-2 border-dashed border-[#ff6b99]/40 bg-white p-4 shadow-[0_12px_25px_-18px_rgba(255,107,153,0.25)] ring-2 ring-white/70">
+                      <QRCodeSVG
+                        value={`${publicUrl.replace(/\/$/, "")}/${code}`}
+                        size={qrSize}
+                        bgColor="transparent"
+                        fgColor="#000000"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <p className="text-xs font-black uppercase tracking-[0.3em] text-[#ff6b99] font-atkinson">
+                        Lobby Code
+                      </p>
+                      <h3 className="text-3xl font-black tracking-[0.35em] text-slate-900 font-atkinson">
+                        {code
+                          ? `${code.slice(0, 2)}-${code.slice(2, 4)}-${code.slice(
+                              4,
+                              6,
+                            )}`
+                          : "------"}
+                      </h3>
+                      <p className="text-sm text-slate-600">
+                        Share the QR or the code so friends can join quickly.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </DrawerContent>
+            </Drawer>
+
+            <div className="fixed inset-x-0 bottom-0 z-40 px-6 pb-6">
+              <div className="mx-auto flex w-full max-w-5xl items-center gap-3">
+                <motion.div
+                  animate={players.length < 3 ? { y: [0, -12, 0] } : { y: 0 }}
+                  transition={
+                    players.length < 3
+                      ? {
+                          duration: 0.5,
+                          times: [0, 0.5, 1],
+                          repeat: Infinity,
+                          repeatDelay: 1.5,
+                        }
+                      : { duration: 0 }
+                  }
+                >
+                  <Button
+                    type="button"
+                    variant="gummyBlue"
+                    onClick={() => setIsHostDrawerOpen((prev) => !prev)}
+                    className="h-12 w-12 shrink-0"
+                    aria-label="Toggle lobby code drawer"
+                  >
+                    <QrCode className="h-6 w-6 stroke-[3]" />
+                  </Button>
+                </motion.div>
+                <Button
+                  onClick={handleStartGame}
+                  disabled={isStarting || players.length < 3}
+                  variant="gummyOrange"
+                  className="h-12 flex-1 min-w-0 text-base"
+                >
+                  {isStarting
+                    ? "Starting..."
+                    : players.length < 3
+                      ? `Waiting for ${3 - players.length} more player${
+                          3 - players.length === 1 ? "" : "s"
+                        }...`
+                      : "Start Game"}
+                </Button>
+              </div>
+            </div>
+          </>
+        )}
+
+        <Drawer open={isRulesDrawerOpen} onOpenChange={setIsRulesDrawerOpen}>
+          <DrawerContent className="rounded-t-[32px] border-0 bg-white/95 p-6 pb-8 pt-12 shadow-[0_20px_50px_rgba(255,107,153,0.2)] sm:p-8 sm:pt-14 [&>div:first-child]:hidden before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-[10px] before:rounded-t-[32px] before:bg-[linear-gradient(90deg,#ff6b99,#ffd966,#66e0ff,#a855f7,#ff6b99)]">
+            <div className="mx-auto flex w-full max-w-2xl flex-col gap-6">
+              <DrawerTitle className="text-center text-sm font-black uppercase tracking-[0.3em] text-[#ff6b99]">
+                7 Rules
+              </DrawerTitle>
+              <div className="max-h-[70svh] space-y-4 overflow-y-auto rounded-2xl bg-white/90 p-4 text-sm text-slate-700 shadow-[inset_0_1px_6px_rgba(0,0,0,0.08)] sm:p-6">
+                {RULES_SECTIONS.map((section) => (
+                  <div
+                    key={section.title}
+                    className="rounded-xl border border-white/80 bg-white/70 p-4 shadow-[0_10px_20px_rgba(15,23,42,0.08)]"
+                  >
+                    <p className="text-xs font-black uppercase tracking-[0.3em] text-[#ff6b99]">
+                      {section.title}
+                    </p>
+                    {Array.isArray(section.body) ? (
+                      <ul className="mt-3 space-y-2 text-sm font-medium text-slate-700">
+                        {section.body.map((item) => (
+                          <li key={item} className="flex gap-2">
+                            <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-[#66e0ff]" />
+                            <span>{item}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="mt-2 text-sm font-medium text-slate-700">
+                        {section.body}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </DrawerContent>
+        </Drawer>
+
+        <Drawer
+          open={isProfileDrawerOpen || state === "needs-name"}
+          onOpenChange={(open) => {
+            if (state === "needs-name") {
+              setIsProfileDrawerOpen(true);
+              return;
+            }
+            setIsProfileDrawerOpen(open);
+          }}
+        >
+          <DrawerContent className="rounded-t-[32px] border-0 bg-white/95 p-6 pb-8 pt-12 shadow-[0_20px_50px_rgba(255,107,153,0.2)] sm:p-8 sm:pt-14 [&>div:first-child]:hidden before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-[10px] before:rounded-t-[32px] before:bg-[linear-gradient(90deg,#ff6b99,#ffd966,#66e0ff,#a855f7,#ff6b99)]">
+            <div className="mx-auto flex w-full max-w-md flex-col gap-6">
+              <DrawerTitle className="sr-only">Edit profile</DrawerTitle>
+              <div className="relative -mt-12 flex justify-center sm:-mt-16">
+                <div
+                  className={`relative flex h-24 w-24 items-center justify-center rounded-full text-4xl font-semibold text-white shadow-[0_18px_40px_rgba(255,107,153,0.25)] ring-4 ring-white/80 ${getAvatarClass(
+                    currentPlayer?.id ?? profileName ?? "you",
+                    profileColor,
+                  )}`}
+                >
+                  <span className="pointer-events-none absolute left-[18%] top-[18%] h-[38%] w-[38%] rounded-full bg-white/20 blur-[1px]" />
+                  <span className={profileAvatar ? "text-4xl leading-none" : "text-2xl"}>
+                    {profileAvatar || (profileName ? profileName.slice(0, 2).toUpperCase() : "--")}
+                  </span>
+                </div>
+              </div>
+
+              {state === "needs-name" && hasStoredProfile ? (
+                <div className="flex flex-col items-center gap-3 text-center">
+                  <p className="text-sm font-medium text-slate-600">
+                    We’ll use your saved profile to join quickly.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleEditProfile}
+                    className="text-xs font-bold uppercase tracking-[0.25em] text-[#ff6b99] underline decoration-[#ff6b99]/40 decoration-2 underline-offset-4"
+                  >
+                    Edit Profile
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="space-y-3">
+                    <Label
+                      htmlFor="profile-name"
+                      className="text-xs font-bold uppercase tracking-[0.25em] text-[#ff6b99] sm:text-sm"
+                    >
+                      Your Name
+                    </Label>
+                    <Input
+                      id="profile-name"
+                      placeholder="Enter your name"
+                      value={profileName}
+                      onChange={(event) => {
+                        setProfileName(event.target.value);
+                        if (hasStoredProfile) setHasStoredProfile(false);
+                      }}
+                      className="h-12 rounded-full border-0 bg-white text-base font-semibold text-slate-900 shadow-[inset_0_4px_8px_rgba(0,0,0,0.05)] ring-4 ring-[#ff6b99]/20 placeholder:text-slate-400 focus-visible:ring-[#66e0ff]"
+                    />
+                  </div>
+
+                  <div className="space-y-3">
+                    <p className="text-xs font-bold uppercase tracking-[0.25em] text-[#ff6b99] sm:text-sm">
+                      Avatar
+                    </p>
+                    <div className="flex flex-wrap gap-3">
+                      {avatarOptions.map((avatar) => (
+                        <button
+                          key={avatar}
+                          type="button"
+                          onClick={() => {
+                            setProfileAvatar(avatar);
+                            if (hasStoredProfile) setHasStoredProfile(false);
+                          }}
+                          className={`flex h-12 w-12 items-center justify-center rounded-full bg-white text-2xl shadow-[0_8px_18px_rgba(0,0,0,0.08)] ring-4 ring-white/70 ${
+                            profileAvatar === avatar ? "border-2 border-black" : ""
+                          }`}
+                        >
+                          {avatar}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    <p className="text-xs font-bold uppercase tracking-[0.25em] text-[#ff6b99] sm:text-sm">
+                      Color
+                    </p>
+                    <div className="flex flex-wrap gap-3">
+                      {colorOptions.map((option) => (
+                        <button
+                          key={option.key}
+                          type="button"
+                          onClick={() => {
+                            setProfileColor(option.key);
+                            if (hasStoredProfile) setHasStoredProfile(false);
+                          }}
+                          className={`h-10 w-10 rounded-full ring-4 ring-white/70 ${
+                            profileColor === option.key ? "border-2 border-black" : ""
+                          } ${getAvatarClass(option.key, option.key)}`}
+                          aria-label={option.label}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
+
+              <DrawerFooter className="px-0">
+                <Button
+                  onClick={state === "needs-name" ? handleJoin : handleSaveProfile}
+                  variant="gummyOrange"
+                  className="h-12 w-full text-base"
+                >
+                  {state === "needs-name"
+                    ? hasStoredProfile
+                      ? `Join as ${profileName}?`
+                      : `Join ${hostName}'s Lobby`
+                    : "Save Profile"}
+                </Button>
+              </DrawerFooter>
+            </div>
+          </DrawerContent>
+        </Drawer>
       </main>
     </SessionGate>
   );

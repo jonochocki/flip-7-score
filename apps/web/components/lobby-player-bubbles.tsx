@@ -5,6 +5,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 type Player = {
   id: string;
   name: string;
+  avatar?: string | null;
+  color?: string | null;
 };
 
 type Bubble = {
@@ -23,14 +25,14 @@ type LobbyPlayerBubblesProps = {
 };
 
 const AVATAR_COLORS = [
-  "bg-amber-500",
-  "bg-emerald-500",
-  "bg-cyan-500",
-  "bg-rose-500",
-  "bg-indigo-500",
-  "bg-lime-500",
-  "bg-sky-500",
-  "bg-orange-500",
+  { key: "pink", className: "bg-gradient-to-br from-rose-400 to-pink-500" },
+  { key: "orange", className: "bg-gradient-to-br from-amber-300 to-orange-400" },
+  { key: "blue", className: "bg-gradient-to-br from-sky-300 to-blue-500" },
+  { key: "teal", className: "bg-gradient-to-br from-emerald-300 to-teal-500" },
+  { key: "purple", className: "bg-gradient-to-br from-purple-400 to-indigo-500" },
+  { key: "magenta", className: "bg-gradient-to-br from-fuchsia-400 to-pink-500" },
+  { key: "yellow", className: "bg-gradient-to-br from-yellow-300 to-amber-400" },
+  { key: "cyan", className: "bg-gradient-to-br from-cyan-300 to-sky-500" },
 ] as const;
 
 export const AVATAR_SIZE = 64;
@@ -59,9 +61,21 @@ export const getInitials = (name: string) => {
   return `${first}${second}`.toUpperCase() || "--";
 };
 
-export const getAvatarClass = (seed: string) => {
+export const getAvatarClass = (seed: string, color?: string | null) => {
+  if (color) {
+    const matched = AVATAR_COLORS.find((item) => item.key === color);
+    if (matched) return matched.className;
+  }
   const hash = hashSeed(seed);
-  return AVATAR_COLORS[hash % AVATAR_COLORS.length];
+  return (
+    AVATAR_COLORS[hash % AVATAR_COLORS.length]?.className ??
+    AVATAR_COLORS[0].className
+  );
+};
+
+export const getAvatarLabel = (name: string, avatar?: string | null) => {
+  if (avatar) return avatar;
+  return getInitials(name);
 };
 
 export function LobbyPlayerBubbles({
@@ -209,21 +223,29 @@ export function LobbyPlayerBubbles({
               }}
             >
               <div
-                className={`flex items-center justify-center rounded-full text-sm font-semibold text-white shadow-lg ${getAvatarClass(
+                className={`relative flex items-center justify-center rounded-full text-xl font-semibold text-white shadow-[0_14px_30px_rgba(255,107,153,0.25)] ring-4 ring-white/70 ${getAvatarClass(
                   seed,
+                  player.color,
                 )}`}
                 style={{
                   width: AVATAR_SIZE,
                   height: AVATAR_SIZE,
                 }}
               >
-                {getInitials(player.name)}
+                <span className="pointer-events-none absolute left-[18%] top-[18%] h-[38%] w-[38%] rounded-full bg-white/20 blur-[1px]" />
+                <span
+                  className={
+                    player.avatar ? "text-3xl leading-none" : "text-sm"
+                  }
+                >
+                  {getAvatarLabel(player.name, player.avatar)}
+                </span>
               </div>
-              <div className="text-xs font-medium text-slate-600 dark:text-slate-200">
+              <div className="rounded-full bg-white/80 px-2 py-0.5 text-[11px] font-semibold text-slate-700 shadow-[0_6px_16px_rgba(0,0,0,0.08)] ring-2 ring-white/70">
                 {player.name}
               </div>
               {isHostPlayer && (
-                <span className="text-[10px] uppercase tracking-[0.2em] text-slate-500 dark:text-slate-300">
+                <span className="rounded-full bg-white/80 px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.2em] text-[#ff6b99] ring-2 ring-[#ff6b99]/20">
                   Host
                 </span>
               )}
