@@ -1,5 +1,6 @@
 import "@workspace/ui/globals.css"
 import { Providers } from "@/components/providers"
+import { SpeedInsights } from "@vercel/speed-insights/next"
 
 export const viewport = {
   width: "device-width",
@@ -22,6 +23,7 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <body className="font-sans antialiased">
         <Providers>{children}</Providers>
+        <SpeedInsights />
       </body>
     </html>
   )
