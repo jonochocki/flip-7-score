@@ -1,11 +1,19 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { getAvatarClass, getInitials } from "@/components/lobby-player-bubbles";
+import * as motion from "motion/react-client";
+import { Pencil } from "lucide-react";
+import {
+  computeLobbyLayout,
+  type LayoutMode,
+} from "@/components/lobby-orbit-layout";
+import { getAvatarClass, getAvatarLabel } from "@/components/lobby-player-bubbles";
 
 type Player = {
   id: string;
   name: string;
+  avatar?: string | null;
+  color?: string | null;
 };
 
 type LobbyPlayerOrbitProps = {
@@ -13,146 +21,24 @@ type LobbyPlayerOrbitProps = {
   currentPlayerId: string;
   hostPlayerId: string;
   isHost: boolean;
+  onOpenProfile?: () => void;
+  layoutMode?: LayoutMode;
 };
 
-type OrbitBubble = {
-  id: string;
-  left: number;
-  top: number;
-  size: number;
-  floatX: number;
-  floatY: number;
-  floatScale: number;
-  duration: number;
-  delay: number;
-};
-
-const hashSeed = (seed: string) => {
-  let hash = 0;
-  for (let i = 0; i < seed.length; i += 1) {
-    hash = (hash * 31 + seed.charCodeAt(i)) % 10000;
-  }
-  return hash;
-};
-
-const clamp = (value: number, min: number, max: number) =>
-  Math.min(Math.max(value, min), max);
-
-type LayoutResult = {
-  coreSize: number;
-  bubbles: OrbitBubble[];
-};
-
-const computeLayout = (
-  width: number,
-  height: number,
-  players: Player[],
-): LayoutResult => {
-  if (!width || !height || players.length === 0) {
-    return { coreSize: 200, bubbles: [] };
-  }
-
-  const minDim = Math.min(width, height);
-  const padding = Math.max(minDim * 0.06, 20);
-  const labelSpace = 40;
-  const coreSize = Math.min(220, minDim * 0.52);
-  const maxOther = minDim * 0.22;
-  const minOther = minDim * 0.14;
-  const countAdjust = players.length * 6;
-  const otherSize = clamp(maxOther - countAdjust, minOther, maxOther);
-  const ringBase =
-    coreSize / 2 + otherSize / 2 + Math.min(minDim * 0.08, 52);
-
-  const centerX = width / 2;
-  const centerY = height / 2;
-
-  const placed: OrbitBubble[] = players.map((player, index) => {
-    const seed = hashSeed(player.id ?? player.name);
-    const angle =
-      (index / Math.max(players.length, 1)) * Math.PI * 2 +
-      (seed % 30) * 0.03;
-    const radius = ringBase + (seed % 30);
-    const left = centerX + Math.cos(angle) * radius - otherSize / 2;
-    const top = centerY + Math.sin(angle) * radius - otherSize / 2;
-    return {
-      id: player.id,
-      left,
-      top,
-      size: otherSize,
-      floatX: ((seed % 16) - 8) * 0.7,
-      floatY: ((seed % 18) - 9) * 0.7,
-      floatScale: 0.08 + (seed % 5) * 0.02,
-      duration: 10 + (seed % 8),
-      delay: ((seed % 10) - 5) * 0.5,
-    };
-  });
-
-  for (let iter = 0; iter < 28; iter += 1) {
-    placed.forEach((bubble, i) => {
-      let ax = 0;
-      let ay = 0;
-      const bx = bubble.left + bubble.size / 2;
-      const by = bubble.top + bubble.size / 2;
-
-      const coreDx = bx - centerX;
-      const coreDy = by - centerY;
-      const coreDistance = Math.hypot(coreDx, coreDy) || 1;
-      const coreMin = coreSize / 2 + bubble.size / 2 + padding * 0.95;
-      if (coreDistance < coreMin) {
-        const push = (coreMin - coreDistance) / coreMin;
-        ax += (coreDx / coreDistance) * push * 20;
-        ay += (coreDy / coreDistance) * push * 20;
-      }
-
-      placed.forEach((other, j) => {
-        if (i === j) return;
-        const ox = other.left + other.size / 2;
-        const oy = other.top + other.size / 2;
-        const dx = bx - ox;
-        const dy = by - oy;
-        const distance = Math.hypot(dx, dy) || 1;
-        const minDist = (bubble.size + other.size) * 0.58;
-        if (distance < minDist) {
-          const push = (minDist - distance) / minDist;
-          ax += (dx / distance) * push * 16;
-          ay += (dy / distance) * push * 16;
-        }
-      });
-
-      const targetRadius = ringBase + (i % 3) * 10;
-      const currentRadius = Math.hypot(bx - centerX, by - centerY) || 1;
-      const radialDiff = currentRadius - targetRadius;
-      ax += (-(coreDx / currentRadius) * radialDiff) * 0.08;
-      ay += (-(coreDy / currentRadius) * radialDiff) * 0.08;
-
-      const floatPad =
-        Math.max(Math.abs(bubble.floatX), Math.abs(bubble.floatY)) +
-        bubble.size * bubble.floatScale;
-
-      bubble.left += ax;
-      bubble.top += ay;
-
-      bubble.left = clamp(
-        bubble.left,
-        padding + floatPad,
-        width - bubble.size - padding - floatPad,
-      );
-      bubble.top = clamp(
-        bubble.top,
-        padding + floatPad,
-        height - bubble.size - labelSpace - padding - floatPad,
-      );
-    });
-  }
-
-  return { coreSize, bubbles: placed };
-};
+const floatTransition = (duration: number, delay: number) => ({
+  duration,
+  repeat: Infinity,
+  ease: "easeInOut",
+  delay,
+});
 
 export function LobbyPlayerOrbit({
   players,
   currentPlayerId,
   hostPlayerId,
   isHost,
+  onOpenProfile,
+  layoutMode = "orbit",
 }: LobbyPlayerOrbitProps) {
   const currentPlayer = players.find((player) => player.id === currentPlayerId);
   const orbitPlayers = useMemo(
@@ -188,41 +74,87 @@ export function LobbyPlayerOrbit({
   }, []);
 
   const layout = useMemo(
-    () => computeLayout(containerSize.width, containerSize.height, orbitPlayers),
-    [containerSize, orbitPlayers],
+    () =>
+      computeLobbyLayout(
+        containerSize.width,
+        containerSize.height,
+        orbitPlayers,
+        layoutMode,
+      ),
+    [containerSize, orbitPlayers, layoutMode],
   );
 
   return (
-    <section className="relative w-full">
+    <section className="relative flex w-full flex-1">
       <div
         ref={containerRef}
-        className="relative mx-auto flex min-h-[380px] w-full items-center justify-center overflow-hidden sm:min-h-[460px]"
+        className="relative mx-auto flex min-h-[320px] w-full flex-1 items-center justify-center overflow-hidden sm:min-h-[420px]"
       >
-        <div className="relative z-10 flex flex-col items-center justify-center gap-3">
-          <div
-            className={`flex items-center justify-center rounded-full text-3xl font-semibold text-white shadow-[0_25px_55px_rgba(31,43,122,0.35)] ${getAvatarClass(
-              currentPlayer?.id ?? currentPlayer?.name ?? "you",
-            )}`}
-            style={{
-              width: layout.coreSize,
-              height: layout.coreSize,
-              animation: "core-pulse 8s ease-in-out infinite",
-            }}
+        <motion.div
+          className="relative z-10 flex flex-col items-center justify-center gap-3"
+          animate={{ scale: [1, 1.02, 1] }}
+          transition={{
+            duration: 7,
+            repeat: Infinity,
+            ease: "easeInOut",
+          }}
+        >
+          <div className="relative flex flex-col items-center justify-center gap-3">
+            <motion.div
+              role="button"
+              tabIndex={0}
+              onClick={onOpenProfile}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onOpenProfile?.();
+                }
+              }}
+              aria-label="Edit your profile"
+              className={`relative flex items-center justify-center rounded-full text-4xl font-semibold text-white shadow-[0_25px_55px_rgba(255,107,153,0.3)] ring-6 ring-white/70 ${getAvatarClass(
+                currentPlayer?.id ?? currentPlayer?.name ?? "you",
+                currentPlayer?.color,
+              )}`}
+              style={{
+                width: layout.coreSize,
+                height: layout.coreSize,
+              }}
+            >
+              <span className="pointer-events-none absolute left-[18%] top-[18%] h-[38%] w-[38%] rounded-full bg-white/20 blur-[1px]" />
+              <span
+                className={
+                  currentPlayer?.avatar ? "text-7xl leading-none" : "text-5xl"
+                }
+              >
+                {getAvatarLabel(currentPlayer?.name ?? "", currentPlayer?.avatar)}
+              </span>
+            </motion.div>
+            <button
+              type="button"
+              onClick={onOpenProfile}
+              className="absolute right-0 top-0 flex h-10 w-10 translate-x-1 translate-y-1 items-center justify-center rounded-full bg-white text-[#66a3ff] shadow-[0_10px_18px_rgba(102,163,255,0.2)] ring-4 ring-white/80 transition-transform hover:scale-105 active:scale-95"
+              aria-label="Edit your profile"
+            >
+              <Pencil className="h-4 w-4 stroke-[3]" />
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={onOpenProfile}
+            className="rounded-full bg-white/80 px-3 py-1 text-xs font-semibold text-slate-700 shadow-[0_8px_18px_rgba(0,0,0,0.08)] ring-2 ring-white/70"
+            aria-label="Edit your profile"
           >
-            {getInitials(currentPlayer?.name ?? "")}
-          </div>
-          <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">
             {currentPlayer?.name ?? "Loading..."}
-          </div>
+          </button>
           {currentPlayer?.id === hostPlayerId && (
-            <span className="text-[10px] uppercase tracking-[0.2em] text-slate-500 dark:text-slate-300">
+            <span className="rounded-full bg-white/80 px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.2em] text-[#ff6b99] ring-2 ring-[#ff6b99]/20">
               Host
             </span>
           )}
-        </div>
+        </motion.div>
 
         {orbitPlayers.length === 0 && (
-          <p className="absolute top-full mt-6 text-sm text-slate-600 dark:text-slate-200">
+          <p className="absolute top-full mt-6 text-sm text-slate-600">
             {isHost
               ? "Waiting for more players to join..."
               : "Waiting for the host to start the game..."}
@@ -234,73 +166,72 @@ export function LobbyPlayerOrbit({
           if (!player) return null;
           const isHostPlayer = player.id === hostPlayerId;
           return (
-            <div
+            <motion.div
               key={bubble.id}
-              className="player-bubble absolute flex flex-col items-center"
-              style={{
+              className="absolute z-20 flex flex-col items-center"
+              initial={{ opacity: 0, scale: 0 }}
+              animate={{
+                opacity: 1,
+                scale: 1,
                 left: bubble.left,
                 top: bubble.top,
+              }}
+              transition={{
+                duration: 0.4,
+                scale: { type: "spring", visualDuration: 0.4, bounce: 0.5 },
+              }}
+              style={{
                 width: bubble.size,
-                animation: `floaty ${bubble.duration}s ease-in-out ${bubble.delay}s infinite`,
-                ["--float-x" as string]: `${bubble.floatX}px`,
-                ["--float-y" as string]: `${bubble.floatY}px`,
-                ["--float-scale" as string]: `${bubble.floatScale}`,
               }}
             >
-              <div
-                className={`player-bubble__avatar flex items-center justify-center rounded-full text-xs font-semibold text-white shadow-[0_18px_40px_rgba(31,43,122,0.28)] ${getAvatarClass(
-                  player.id ?? player.name,
-                )}`}
-                style={{
-                  width: bubble.size,
-                  height: bubble.size,
+              <motion.div
+                className="flex flex-col items-center"
+                animate={{
+                  x: [
+                    -(bubble.floatX * 1.6),
+                    bubble.floatX * 1.6,
+                    -(bubble.floatX * 1.6),
+                  ],
+                  y: [0, bubble.floatY * 1.4, 0],
+                  scale: [
+                    1 - bubble.floatScale * 0.4,
+                    1 + bubble.floatScale * 0.4,
+                    1 - bubble.floatScale * 0.4,
+                  ],
                 }}
+                transition={floatTransition(
+                  Math.max(6, bubble.duration * 0.7),
+                  Math.abs(bubble.delay),
+                )}
               >
-                {getInitials(player.name)}
-              </div>
-              <div className="mt-2 text-[11px] font-medium text-slate-600 dark:text-slate-200">
-                {player.name}
-              </div>
-              {isHostPlayer && (
-                <span className="text-[9px] uppercase tracking-[0.2em] text-slate-500 dark:text-slate-300">
-                  Host
-                </span>
-              )}
-            </div>
+                <div
+                  className={`relative flex items-center justify-center rounded-full text-lg font-semibold text-white shadow-[0_18px_40px_rgba(255,107,153,0.25)] ring-4 ring-white/70 ${getAvatarClass(
+                    player.id ?? player.name,
+                    player.color,
+                  )}`}
+                  style={{
+                    width: bubble.size,
+                    height: bubble.size,
+                  }}
+                >
+                  <span className="pointer-events-none absolute left-[18%] top-[18%] h-[38%] w-[38%] rounded-full bg-white/20 blur-[1px]" />
+                  <span className={player.avatar ? "text-5xl leading-none" : "text-2xl"}>
+                    {getAvatarLabel(player.name, player.avatar)}
+                  </span>
+                </div>
+                <div className="relative z-30 mt-2 rounded-full bg-white/80 px-2 py-0.5 text-xs font-semibold text-slate-700 shadow-[0_6px_16px_rgba(0,0,0,0.08)] ring-2 ring-white/70">
+                  {player.name}
+                </div>
+                {isHostPlayer && (
+                  <span className="relative z-30 mt-1 rounded-full bg-white/80 px-2 py-0.5 text-[8px] font-bold uppercase tracking-[0.2em] text-[#ff6b99] ring-2 ring-[#ff6b99]/20">
+                    Host
+                  </span>
+                )}
+              </motion.div>
+            </motion.div>
           );
         })}
       </div>
-      <style jsx>{`
-        .player-bubble {
-          transition: left 0.6s ease, top 0.6s ease, width 0.6s ease;
-        }
-
-        .player-bubble__avatar {
-          transition: width 0.6s ease, height 0.6s ease;
-        }
-
-        @keyframes floaty {
-          0%,
-          100% {
-            transform: translate3d(calc(var(--float-x) * -1), 0, 0)
-              scale(calc(1 - var(--float-scale)));
-          }
-          50% {
-            transform: translate3d(var(--float-x), var(--float-y), 0)
-              scale(calc(1 + var(--float-scale)));
-          }
-        }
-
-        @keyframes core-pulse {
-          0%,
-          100% {
-            transform: scale(1);
-          }
-          50% {
-            transform: scale(1.04);
-          }
-        }
-      `}</style>
     </section>
   );
 }

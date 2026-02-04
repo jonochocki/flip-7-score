@@ -1,6 +1,8 @@
 "use client";
 
+import Image from "next/image";
 import { ChartNoAxesColumn, Info } from "lucide-react";
+import { Button } from "@workspace/ui/components/button";
 
 type AppHeaderProps = {
   title?: string;
@@ -16,32 +18,38 @@ export function AppHeader({
   rightSlot,
 }: AppHeaderProps) {
   return (
-    <header className="flex items-center justify-between gap-4">
-      <button
+    <header className="relative flex items-center justify-between gap-4">
+      <Button
         type="button"
         aria-label="Leaderboard"
         onClick={onLeftClick}
-        className="flex h-10 w-10 items-center justify-center rounded-full border-2 border-[#1f2b7a] bg-white text-sm font-semibold text-[#1f2b7a] shadow-[0_10px_20px_rgba(31,43,122,0.2)] hover:bg-white/80 dark:border-[#7ce7ff] dark:bg-slate-950/70 dark:text-[#7ce7ff]"
+        variant="gummyBlue"
+        className="h-10 w-10 p-0"
       >
         <ChartNoAxesColumn className="h-4 w-4" />
-      </button>
-      <div className="flex flex-1 justify-center">
-        <span className="text-sm font-semibold uppercase tracking-[0.35em] text-[#1f2b7a] dark:text-[#7ce7ff]">
-          {/* TODO: Replace text with image logo. */}
-          {title}
-        </span>
+      </Button>
+      <div className="pointer-events-none absolute left-1/2 flex -translate-x-1/2 justify-center">
+        <Image
+          src="/assets/img/7-score-logo.png"
+          alt={title}
+          width={160}
+          height={48}
+          className="h-8 w-auto object-contain"
+          priority
+        />
       </div>
       {rightSlot ? (
         rightSlot
       ) : (
-        <button
+        <Button
           type="button"
           aria-label="Info"
           onClick={onRightClick}
-          className="flex h-10 w-10 items-center justify-center rounded-full border-2 border-[#1f2b7a] bg-white text-[#1f2b7a] shadow-[0_10px_20px_rgba(31,43,122,0.2)] hover:bg-white/80 dark:border-[#7ce7ff] dark:bg-slate-950/70 dark:text-[#7ce7ff]"
+          variant="gummyBlue"
+          className="h-10 w-10 p-0"
         >
           <Info className="h-4 w-4" />
-        </button>
+        </Button>
       )}
     </header>
   );

@@ -1,47 +1,78 @@
 "use client";
 
-import { useState } from "react";
+import { type ElementType, useState } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
+import { ArrowRight, Clock, Gamepad2, LogIn, Trophy, Users } from "lucide-react";
 import { Button } from "@workspace/ui/components/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@workspace/ui/components/dialog";
+  Drawer,
+  DrawerContent,
+  DrawerFooter,
+  DrawerTitle,
+} from "@workspace/ui/components/drawer";
+import {
+  InputOTP,
+  InputOTPGroup,
+  InputOTPSlot,
+  InputOTPSeparator,
+} from "@workspace/ui/components/input-otp";
 import { Input } from "@workspace/ui/components/input";
 import { Label } from "@workspace/ui/components/label";
-import { AppHeader } from "@/components/app-header";
 import { SessionGate } from "@/components/session-gate";
 import { useAnonSession } from "@/hooks/use-anon-session";
+import { cn } from "@workspace/ui/lib/utils";
 
-type Mode = "idle" | "join";
 type StoredHostLobby = {
   gameId: string;
   code: string;
   playerId: string;
 };
 
+type InfoPillProps = {
+  icon: ElementType;
+  label: string;
+  color: string;
+  bg: string;
+};
+
+const HomeSessionLoading = () => (
+  <main className="relative min-h-svh overflow-hidden bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50 text-slate-900">
+    <div className="pointer-events-none absolute inset-0 opacity-40 [background-image:radial-gradient(circle_at_2px_2px,rgba(79,70,229,0.18)_2px,transparent_0)] [background-size:24px_24px]" />
+    <div className="pointer-events-none absolute -top-24 left-1/2 h-80 w-80 -translate-x-1/2 rounded-full bg-gradient-to-tr from-[#ff99b8]/40 to-[#ffd966]/40 blur-3xl" />
+    <div className="pointer-events-none absolute -bottom-32 right-0 h-96 w-96 rounded-full bg-gradient-to-bl from-[#66e0ff]/40 to-[#ff99b8]/40 blur-3xl" />
+    <div className="relative mx-auto flex min-h-svh w-full max-w-5xl flex-col items-center justify-center gap-6 px-5 pb-24 pt-6 sm:px-10 sm:pb-28 sm:pt-10 lg:px-16">
+      <div className="rounded-full bg-gradient-to-r from-[#ff8cc3] via-[#ffd966] to-[#66e0ff] p-[3px] shadow-[0_18px_40px_-18px_rgba(255,107,153,0.5)]">
+        <div className="rounded-full bg-white/95 px-6 py-3 text-sm font-black uppercase tracking-[0.25em] text-slate-900 shadow-[inset_0_2px_0_rgba(255,255,255,0.9)]">
+          Setting up game...
+        </div>
+      </div>
+    </div>
+  </main>
+);
+
 export default function Page() {
-  const [mode, setMode] = useState<Mode>("idle");
+  const [isJoinDrawerOpen, setIsJoinDrawerOpen] = useState(false);
+  const [isCreateDrawerOpen, setIsCreateDrawerOpen] = useState(false);
   const [lobbyCode, setLobbyCode] = useState("");
-  const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [hostName, setHostName] = useState("");
   const [createError, setCreateError] = useState("");
   const [isCreating, setIsCreating] = useState(false);
   const router = useRouter();
+
   const {
     error: sessionError,
     loading: sessionLoading,
     supabase: supabaseClient,
   } = useAnonSession();
 
+  
+
   const handleCreateLobby = async () => {
     if (!hostName.trim() || isCreating) return;
     setCreateError("");
     setIsCreating(true);
+
     if (sessionLoading) {
       setCreateError("Setting up your session. Try again in a moment.");
       setIsCreating(false);
@@ -54,11 +85,13 @@ export default function Page() {
     }
 
     const supabase = supabaseClient;
-
     const stored =
       typeof window !== "undefined"
-        ? (localStorage.getItem("flip7_host_lobby") ?? "")
+        ? sessionStorage.getItem("flip7_host_lobby") ??
+          localStorage.getItem("flip7_host_lobby") ??
+          ""
         : "";
+
     if (stored) {
       try {
         const parsed = JSON.parse(stored) as StoredHostLobby;
@@ -86,7 +119,12 @@ export default function Page() {
       } catch {
         // Ignore invalid local storage entries.
       }
-      localStorage.removeItem("flip7_host_lobby");
+      try {
+        sessionStorage.removeItem("flip7_host_lobby");
+        localStorage.removeItem("flip7_host_lobby");
+      } catch {
+        // Ignore storage failures.
+      }
     }
 
     const { data, error: rpcError } = await supabase.rpc("create_game", {
@@ -102,171 +140,247 @@ export default function Page() {
     }
 
     const created = data[0];
-    localStorage.setItem(
-      "flip7_host_lobby",
-      JSON.stringify({
+    try {
+      const hostValue = JSON.stringify({
         gameId: created.game_id,
         code: created.code,
         playerId: created.player_id,
-      }),
-    );
-    localStorage.setItem(
-      `flip7_player_${created.code}`,
-      JSON.stringify({ gameId: created.game_id, playerId: created.player_id }),
-    );
+      });
+      sessionStorage.setItem("flip7_host_lobby", hostValue);
+      localStorage.setItem("flip7_host_lobby", hostValue);
+      const playerValue = JSON.stringify({
+        gameId: created.game_id,
+        playerId: created.player_id,
+      });
+      sessionStorage.setItem(`flip7_player_${created.code}`, playerValue);
+      localStorage.setItem(`flip7_player_${created.code}`, playerValue);
+    } catch {
+      // Ignore storage failures.
+    }
     router.push(`/lobby/${created.code}`);
   };
 
   return (
-    <SessionGate loading={sessionLoading} error={sessionError}>
-    <main className="relative min-h-svh overflow-hidden bg-[#f7f2e7] text-slate-900 dark:bg-slate-950 dark:text-slate-50">
-      <div className="pointer-events-none absolute -top-24 left-1/2 h-80 w-80 -translate-x-1/2 rounded-full bg-[radial-gradient(circle_at_center,rgba(255,86,120,0.45),transparent_65%)] blur-2xl" />
-      <div className="pointer-events-none absolute -bottom-32 right-0 h-96 w-96 rounded-full bg-[radial-gradient(circle_at_center,rgba(70,210,255,0.55),transparent_65%)] blur-3xl" />
-      <div className="pointer-events-none absolute left-10 top-20 hidden h-32 w-32 rotate-6 rounded-3xl border-[3px] border-[#1f2b7a]/60 bg-white/70 shadow-[0_20px_45px_rgba(31,43,122,0.25)] lg:block dark:border-[#7ce7ff]/70 dark:bg-slate-900/60" />
+    <SessionGate
+      loading={sessionLoading}
+      error={sessionError}
+      loadingFallback={<HomeSessionLoading />}
+    >
+      <main className="relative min-h-svh w-full overflow-hidden font-sans">
 
-      <div className="relative mx-auto flex min-h-svh w-full max-w-5xl flex-col gap-10 px-6 py-10 sm:py-14">
-        <AppHeader />
-        <div className="grid gap-10 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
-          <div className="space-y-6">
-            <div className="space-y-3">
-              <p className="text-xs font-semibold uppercase tracking-[0.35em] text-[#ff4f70] dark:text-[#ff87a0]">
-                Press Your Luck
-              </p>
-              <h1 className="text-4xl font-semibold tracking-tight sm:text-5xl lg:text-6xl">
-                7 Score
-              </h1>
-              <p className="max-w-xl text-base text-slate-700 dark:text-slate-200 sm:text-lg">
+        <div className="relative z-10 flex min-h-svh w-full flex-col justify-center gap-10 px-5 py-6 sm:px-10 sm:py-10 lg:px-16">
+          <div className="grid w-full gap-10 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
+            <section className="space-y-6 text-center lg:text-left">
+              <div className="flex flex-col items-center space-y-3 lg:items-start">
+                <Image
+                  src="/assets/img/7-score-logo.png"
+                  alt="7 Score"
+                  width={520}
+                  height={180}
+                  className="h-32 w-auto object-contain sm:h-20"
+                  priority
+                />
+                <p className="text-base font-bold uppercase tracking-[0.3em] text-indigo-300">
+                  Press Your Luck
+                </p>
+              </div>
+
+              <p className="mx-auto max-w-xl text-lg text-slate-600 lg:mx-0 lg:text-xl">
                 Start a new lobby or jump into a friend&apos;s game with a quick
                 code scan.
               </p>
-            </div>
-            <div className="flex flex-wrap gap-3 text-xs font-semibold uppercase tracking-[0.2em] text-[#1f2b7a] dark:text-[#7ce7ff] sm:text-sm">
-              <span className="rounded-full border-2 border-[#1f2b7a] bg-white px-3 py-2 shadow-[0_8px_18px_rgba(31,43,122,0.2)] sm:px-4 dark:border-[#7ce7ff] dark:bg-slate-900/70">
-                Race To 200
-              </span>
-              <span className="rounded-full border-2 border-[#1f2b7a] bg-white px-3 py-2 shadow-[0_8px_18px_rgba(31,43,122,0.2)] sm:px-4 dark:border-[#7ce7ff] dark:bg-slate-900/70">
-                3+ Players
-              </span>
-              <span className="rounded-full border-2 border-[#1f2b7a] bg-white px-3 py-2 shadow-[0_8px_18px_rgba(31,43,122,0.2)] sm:px-4 dark:border-[#7ce7ff] dark:bg-slate-900/70">
-                20 Min
-              </span>
-            </div>
-          </div>
 
-          <section className="relative rounded-[28px] border-[3px] border-[#1f2b7a] bg-white/90 p-5 shadow-[0_25px_60px_rgba(31,43,122,0.28)] backdrop-blur sm:p-6 dark:border-[#7ce7ff] dark:bg-slate-900/80">
-            <div className="absolute -top-5 left-6 rounded-full border-[3px] border-[#1f2b7a] bg-[#ffd04a] px-4 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-[#1f2b7a] shadow-[0_12px_24px_rgba(31,43,122,0.25)] dark:border-[#7ce7ff] dark:bg-[#ffb64a] dark:text-slate-900">
-              Game Lobby
-            </div>
-
-            <div className="mt-6 space-y-5">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <Button
-                  onClick={() => {
-                    setCreateError("");
-                    setIsDialogOpen(true);
-                  }}
-                  className="h-12 rounded-full border-2 border-[#1f2b7a] bg-gradient-to-r from-[#ff4f70] via-[#ffd04a] to-[#46d2ff] text-base font-semibold uppercase tracking-[0.2em] text-[#1f2b7a] shadow-[0_14px_25px_rgba(31,43,122,0.25)] hover:opacity-90 dark:border-[#7ce7ff] dark:text-slate-900"
-                >
-                  New Game
-                </Button>
-                <Button
-                  onClick={() => setMode("join")}
-                  className="h-12 rounded-full border-2 border-[#1f2b7a] bg-white text-base font-semibold uppercase tracking-[0.2em] text-[#1f2b7a] shadow-[0_12px_20px_rgba(31,43,122,0.2)] hover:bg-white/80 dark:border-[#7ce7ff] dark:bg-slate-950/70 dark:text-[#7ce7ff]"
-                >
-                  Join Game
-                </Button>
+              <div className="flex flex-wrap justify-center gap-3 lg:justify-start">
+                <InfoPill
+                  icon={Trophy}
+                  label="Race to 200"
+                  color="text-white"
+                  bg="border-amber-500 bg-gradient-to-b from-amber-300 via-orange-400 to-amber-500 shadow-[0_8px_0_rgba(180,95,20,0.35),0_16px_28px_rgba(255,166,92,0.25)]"
+                />
+                <InfoPill
+                  icon={Users}
+                  label="3+ Players"
+                  color="text-white"
+                  bg="border-sky-600 bg-gradient-to-b from-sky-300 via-sky-500 to-blue-600 shadow-[0_8px_0_rgba(30,110,170,0.35),0_16px_28px_rgba(96,165,250,0.25)]"
+                />
+                <InfoPill
+                  icon={Clock}
+                  label="20 Min"
+                  color="text-white"
+                  bg="border-fuchsia-500 bg-gradient-to-b from-fuchsia-300 via-fuchsia-500 to-purple-600 shadow-[0_8px_0_rgba(120,60,160,0.35),0_16px_28px_rgba(200,120,255,0.25)]"
+                />
               </div>
+            </section>
 
-              {mode === "join" && (
+            <section className="w-full">
+              <div className="mx-auto w-full max-w-md rounded-3xl p-6 sm:border-2 sm:border-indigo-50 sm:bg-white/90 sm:shadow-lg sm:shadow-indigo-100/50 sm:backdrop-blur lg:mx-0">
                 <div className="space-y-4">
-                  <div className="space-y-2">
-                    <Label
-                      htmlFor="lobby-code"
-                      className="text-xs font-semibold uppercase tracking-[0.25em] text-[#1f2b7a] dark:text-[#7ce7ff] sm:text-sm"
-                    >
-                      Lobby Code
-                    </Label>
-                    <Input
-                      id="lobby-code"
-                      placeholder="Enter 6-character code"
-                      autoCapitalize="characters"
-                      value={lobbyCode}
-                      onChange={(event) =>
-                        setLobbyCode(event.target.value.toUpperCase())
-                      }
-                      className="h-12 rounded-full border-2 border-[#1f2b7a] bg-white/90 text-base text-slate-900 shadow-[0_10px_20px_rgba(31,43,122,0.18)] placeholder:text-slate-500 focus-visible:ring-2 focus-visible:ring-[#ff4f70] dark:border-[#7ce7ff] dark:bg-slate-950/70 dark:text-slate-100 dark:placeholder:text-slate-400"
-                    />
-                  </div>
                   <Button
                     onClick={() => {
-                      if (!lobbyCode.trim()) return;
-                      router.push(`/lobby/${lobbyCode.trim()}`);
+                      setCreateError("");
+                      setIsCreateDrawerOpen(true);
                     }}
-                    className="h-12 w-full rounded-full border-2 border-[#1f2b7a] bg-gradient-to-r from-[#ff4f70] via-[#ffd04a] to-[#46d2ff] text-base font-semibold uppercase tracking-[0.2em] text-[#1f2b7a] shadow-[0_14px_25px_rgba(31,43,122,0.25)] hover:opacity-90 dark:border-[#7ce7ff] dark:text-slate-900"
+                    variant="gummyOrange"
+                    className="h-[72px] w-full text-3xl"
                   >
-                    Join Lobby
+                    <span className="flex items-center gap-3">
+                      <Gamepad2 className="h-8 w-8 stroke-[3.5]" />
+                      New Game
+                    </span>
+                  </Button>
+
+                  <Button
+                    onClick={() => setIsJoinDrawerOpen(true)}
+                    variant="gummyBlue"
+                    className="h-[72px] w-full text-3xl"
+                  >
+                    <span className="flex items-center gap-3">
+                      <LogIn className="h-8 w-8 stroke-[3.5]" />
+                      Join Game
+                    </span>
                   </Button>
                 </div>
-                )}
-            </div>
-          </section>
+              </div>
+            </section>
+          </div>
         </div>
-      </div>
+      </main>
 
-      <Dialog
-        open={isDialogOpen}
+      <Drawer
+        open={isCreateDrawerOpen}
         onOpenChange={(open) => {
-          setIsDialogOpen(open);
+          setIsCreateDrawerOpen(open);
           if (!open) {
             setHostName("");
             setCreateError("");
           }
         }}
       >
-        <DialogContent className="rounded-3xl border-2 border-[#1f2b7a] bg-white/95 shadow-[0_25px_60px_rgba(31,43,122,0.35)] dark:border-[#7ce7ff] dark:bg-slate-950/90">
-          <DialogHeader className="space-y-2 text-left">
-            <DialogTitle className="text-2xl font-semibold text-[#1f2b7a] dark:text-[#7ce7ff]">
-              New Game
-            </DialogTitle>
-            <DialogDescription className="text-sm text-slate-600 dark:text-slate-300">
-              Tell us who&apos;s hosting so the lobby is ready to share.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-2">
-            <Label
-              htmlFor="host-name"
-              className="text-xs font-semibold uppercase tracking-[0.25em] text-[#1f2b7a] dark:text-[#7ce7ff] sm:text-sm"
-            >
-              Who is the host?
-            </Label>
-            <Input
-              id="host-name"
-              placeholder="Enter your name"
-              value={hostName}
-              onChange={(event) => setHostName(event.target.value)}
-              className="h-12 rounded-full border-2 border-[#1f2b7a] bg-white/90 text-base text-slate-900 shadow-[0_10px_20px_rgba(31,43,122,0.18)] placeholder:text-slate-500 focus-visible:ring-2 focus-visible:ring-[#ff4f70] dark:border-[#7ce7ff] dark:bg-slate-950/70 dark:text-slate-100 dark:placeholder:text-slate-400"
-            />
-          </div>
-
-          {createError && (
-            <div className="rounded-2xl border-2 border-[#ff4f70] bg-[#ff4f70]/10 p-3 text-sm text-[#a51f3b] dark:border-[#ff87a0] dark:bg-[#ff87a0]/10 dark:text-[#ffd1db]">
-              {createError}
+        <DrawerContent className="rounded-t-[2rem] border-2 border-rose-200 bg-gradient-to-br from-rose-100 via-amber-50 to-white px-6 pb-8 pt-6 shadow-[0_-20px_60px_rgba(255,117,140,0.35)] [&>div:first-child]:hidden">
+          <div className="mx-auto w-full max-w-md space-y-6">
+            <DrawerTitle className="sr-only">Create a new game</DrawerTitle>
+            <div className="mx-auto h-2 w-16 rounded-full bg-rose-300/70 shadow-[inset_0_1px_2px_rgba(255,255,255,0.6)]" />
+            <div className="space-y-3">
+              <Label
+                htmlFor="host-name"
+                className="text-xs font-bold uppercase tracking-widest text-rose-500/80"
+              >
+                Your Nickname
+              </Label>
+              <Input
+                id="host-name"
+                placeholder="e.g. CardShark"
+                value={hostName}
+                onChange={(event) => setHostName(event.target.value)}
+                className="h-14 rounded-xl border-2 border-rose-200 bg-white/90 text-lg font-bold text-slate-800 shadow-[0_10px_25px_rgba(255,138,170,0.25)] placeholder:font-medium placeholder:text-rose-200 focus:border-rose-400 focus:ring-rose-200"
+              />
             </div>
-          )}
 
-          <DialogFooter>
-            <Button
-              onClick={handleCreateLobby}
-              disabled={!hostName.trim() || isCreating}
-              className="h-11 rounded-full border-2 border-[#1f2b7a] bg-gradient-to-r from-[#ff4f70] via-[#ffd04a] to-[#46d2ff] text-sm font-semibold uppercase tracking-[0.2em] text-[#1f2b7a] shadow-[0_14px_25px_rgba(31,43,122,0.25)] hover:opacity-90 disabled:opacity-70 dark:border-[#7ce7ff] dark:text-slate-900"
-            >
-              {isCreating ? "Starting..." : "Start Game"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </main>
+            {createError && (
+              <div className="animate-pulse rounded-xl bg-red-50 p-3 text-center text-sm font-medium text-red-600">
+                {createError}
+              </div>
+            )}
+
+            <DrawerFooter className="px-0">
+              <Button
+                onClick={handleCreateLobby}
+                disabled={!hostName.trim() || isCreating}
+                variant="gummyOrange"
+                className="h-12 w-full text-base"
+              >
+                {isCreating ? "Creating..." : "Start Lobby"}
+              </Button>
+            </DrawerFooter>
+          </div>
+        </DrawerContent>
+      </Drawer>
+
+      <Drawer
+        open={isJoinDrawerOpen}
+        onOpenChange={(open) => {
+          setIsJoinDrawerOpen(open);
+          if (!open) setLobbyCode("");
+        }}
+      >
+      <DrawerContent className="rounded-t-[2rem] border-2 border-sky-200 bg-gradient-to-br from-sky-100 via-blue-50 to-white px-6 pb-8 pt-6 shadow-[0_-20px_60px_rgba(96,165,250,0.35)] [&>div:first-child]:hidden">
+          <div className="mx-auto w-full max-w-md space-y-4">
+            <DrawerTitle className="sr-only">Join a game</DrawerTitle>
+            <div className="mx-auto h-2 w-16 rounded-full bg-sky-300/70 shadow-[inset_0_1px_2px_rgba(255,255,255,0.6)]" />
+            <div className="w-full">
+              <InputOTP
+                maxLength={6}
+                value={lobbyCode}
+                onChange={(value) => setLobbyCode(value.toUpperCase())}
+                containerClassName="w-full justify-between"
+              >
+                <InputOTPGroup className="w-full justify-between gap-2">
+                <InputOTPSlot
+                  index={0}
+                  className="h-12 w-12 rounded-xl border-2 border-sky-200 bg-white text-lg font-black uppercase text-slate-900 shadow-[0_8px_18px_rgba(96,165,250,0.2)] data-[active=true]:bg-white"
+                />
+                <InputOTPSlot
+                  index={1}
+                  className="h-12 w-12 rounded-xl border-2 border-sky-200 bg-white text-lg font-black uppercase text-slate-900 shadow-[0_8px_18px_rgba(96,165,250,0.2)] data-[active=true]:bg-white"
+                />
+                <InputOTPSeparator className="text-sky-500" />
+                <InputOTPSlot
+                  index={2}
+                  className="h-12 w-12 rounded-xl border-2 border-sky-200 bg-white text-lg font-black uppercase text-slate-900 shadow-[0_8px_18px_rgba(96,165,250,0.2)] data-[active=true]:bg-white"
+                />
+                <InputOTPSlot
+                  index={3}
+                  className="h-12 w-12 rounded-xl border-2 border-sky-200 bg-white text-lg font-black uppercase text-slate-900 shadow-[0_8px_18px_rgba(96,165,250,0.2)] data-[active=true]:bg-white"
+                />
+                <InputOTPSeparator className="text-sky-500" />
+                <InputOTPSlot
+                  index={4}
+                  className="h-12 w-12 rounded-xl border-2 border-sky-200 bg-white text-lg font-black uppercase text-slate-900 shadow-[0_8px_18px_rgba(96,165,250,0.2)] data-[active=true]:bg-white"
+                />
+                <InputOTPSlot
+                  index={5}
+                  className="h-12 w-12 rounded-xl border-2 border-sky-200 bg-white text-lg font-black uppercase text-slate-900 shadow-[0_8px_18px_rgba(96,165,250,0.2)] data-[active=true]:bg-white"
+                />
+              </InputOTPGroup>
+            </InputOTP>
+            </div>
+            <DrawerFooter className="px-0">
+              <Button
+                onClick={() =>
+                  lobbyCode.trim() && router.push(`/lobby/${lobbyCode.trim()}`)
+                }
+                variant="gummyBlue"
+                className="h-12 w-full text-base"
+                disabled={lobbyCode.trim().length !== 6}
+              >
+                {lobbyCode.trim().length === 6
+                  ? "Join Game"
+                  : "Enter Lobby Code..."}
+              </Button>
+            </DrawerFooter>
+          </div>
+        </DrawerContent>
+      </Drawer>
     </SessionGate>
+  );
+}
+
+function InfoPill({ icon: Icon, label, color, bg }: InfoPillProps) {
+  return (
+    <div
+      className={cn(
+        "relative flex items-center gap-2 rounded-full border-2 px-4 py-2",
+        bg,
+      )}
+    >
+      <span
+        aria-hidden
+        className="pointer-events-none absolute left-1/2 top-[12%] h-[35%] w-[calc(100%-1.25rem)] -translate-x-1/2 rounded-full bg-white/20 blur-[1px]"
+      />
+      <Icon className={cn("h-4 w-4", color)} />
+      <span className={cn("text-xs font-bold uppercase tracking-wider", color)}>
+        {label}
+      </span>
+    </div>
   );
 }
