@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import type { RealtimeChannel } from "@supabase/supabase-js";
 import Image from "next/image";
+import { AnimatePresence, motion } from "motion/react";
 import { Button } from "@workspace/ui/components/button";
 import {
   Drawer,
@@ -25,6 +25,7 @@ import {
   getAvatarLabel,
 } from "@/components/lobby-player-bubbles";
 import { useAnonSession } from "@/hooks/use-anon-session";
+import { useRealtimeChannel } from "@/hooks/use-realtime-channel";
 
 type GameState = "loading" | "ready" | "error";
 
@@ -140,6 +141,7 @@ export default function GamePage() {
   >([]);
   const [roundStateReady, setRoundStateReady] = useState(false);
   const [totals, setTotals] = useState<TotalScore[]>([]);
+  const [isRoundTransitioning, setIsRoundTransitioning] = useState(false);
   const [isRematchStarting, setIsRematchStarting] = useState(false);
   const {
     session,
@@ -148,16 +150,20 @@ export default function GamePage() {
     supabase: supabaseClient,
   } = useAnonSession();
   const playersCountRef = useRef(0);
+  const playersRef = useRef<Player[]>([]);
   const currentPlayerIdRef = useRef("");
   const currentRoundIdRef = useRef("");
-  const channelRef = useRef<RealtimeChannel | null>(null);
   const hasFiredConfettiRef = useRef(false);
   const winnerConfettiIntervalRef = useRef<number | null>(null);
+  const bustedSubmitRoundRef = useRef<string>("");
+  const roundCompleteBroadcastRef = useRef<string>("");
+  const roundRetryRef = useRef<number | null>(null);
   const code = typeof params.code === "string" ? params.code.toUpperCase() : "";
 
   useEffect(() => {
+    playersRef.current = players;
     playersCountRef.current = players.length;
-  }, [players.length]);
+  }, [players]);
 
   useEffect(() => {
     currentPlayerIdRef.current = currentPlayerId;
@@ -261,126 +267,7 @@ export default function GamePage() {
     init();
   }, [code, router, sessionLoading, supabaseClient]);
 
-  useEffect(() => {
-    if (!gameId || !currentPlayerId) return;
-    const supabase = supabaseClient;
-    let channel: ReturnType<typeof supabase.channel> | null = null;
-
-    const subscribe = () => {
-      channel = supabase
-        .channel(`game:${gameId}`)
-        .on(
-          "postgres_changes",
-          {
-            event: "UPDATE",
-            schema: "public",
-            table: "games",
-            filter: `id=eq.${gameId}`,
-          },
-          async () => {
-            const { data: game } = await supabase
-              .from("games")
-              .select("status, host_player_id")
-              .eq("id", gameId)
-              .maybeSingle();
-            if (game?.status) {
-              setGameStatus(game.status);
-            }
-            if (game?.host_player_id) {
-              setHostPlayerId(game.host_player_id);
-            }
-          },
-        );
-
-      if (currentRoundId) {
-        channel = channel.on(
-          "postgres_changes",
-          {
-            event: "*",
-            schema: "public",
-            table: "round_scores",
-            filter: `round_id=eq.${currentRoundId}`,
-          },
-          async () => {
-            await refreshRoundState(supabase);
-          },
-        );
-      }
-
-      channel = channel
-        .on(
-          "postgres_changes",
-          {
-            event: "*",
-            schema: "public",
-            table: "players",
-            filter: `game_id=eq.${gameId}`,
-          },
-          async () => {
-            await loadPlayers(gameId, supabase);
-          },
-        )
-        .on(
-          "broadcast",
-          { event: "rematch" },
-          ({ payload }: { payload?: { code?: string } }) => {
-            const nextCode = payload?.code;
-            if (!nextCode) return;
-            router.replace(`/lobby/${nextCode}`);
-          },
-        )
-        .on(
-          "postgres_changes",
-          {
-            event: "INSERT",
-            schema: "public",
-            table: "rounds",
-            filter: `game_id=eq.${gameId}`,
-          },
-          async () => {
-            await loadCurrentRound(gameId, supabase);
-          },
-        )
-        .subscribe((status) => {
-          console.info("[game] channel status:", status);
-          if (status === "TIMED_OUT" || status === "CHANNEL_ERROR") {
-            console.warn("[game] realtime issue, resubscribing");
-            if (channel) {
-              supabase.removeChannel(channel);
-            }
-            subscribe();
-          }
-        });
-      channelRef.current = channel;
-    };
-
-    subscribe();
-
-    return () => {
-      if (channel) {
-        supabase.removeChannel(channel);
-      }
-      channelRef.current = null;
-    };
-  }, [gameId, currentPlayerId, currentRoundId, router, supabaseClient]);
-
-  useEffect(() => {
-    if (!gameId || !currentRoundId || allSubmitted) return;
-    const supabase = supabaseClient;
-    const interval = setInterval(() => {
-      refreshRoundState(supabase);
-    }, 3000);
-    return () => clearInterval(interval);
-  }, [allSubmitted, currentRoundId, gameId, supabaseClient]);
-
-  useEffect(() => {
-    if (!gameId || !allSubmitted) return;
-    const supabase = supabaseClient;
-    const interval = setInterval(() => {
-      loadCurrentRound(gameId, supabase);
-    }, 4000);
-    return () => clearInterval(interval);
-  }, [allSubmitted, gameId, supabaseClient]);
+  // Aggressive realtime: rely on Supabase realtime events instead of polling.
 
   useEffect(() => {
     const { body, documentElement } = document;
@@ -394,101 +281,313 @@ export default function GamePage() {
     };
   }, []);
 
-  const loadPlayers = async (
-    id: string,
-    playerId: string,
-    supabase = supabaseClient,
-  ) => {
-    const { data: playersData } = await supabase
-      .from("players")
-      .select("id, name, status, avatar, color")
-      .eq("game_id", id)
-      .order("seat_order", { ascending: true });
-    setPlayers(playersData ?? []);
-    playersCountRef.current = playersData?.length ?? 0;
-    const current = playersData?.find((player) => player.id === playerId);
-    if (current) {
-      setCurrentPlayer(current);
-    }
-  };
-
-  const loadCurrentRound = async (id: string, supabase = supabaseClient) => {
-    const { data: roundData } = await supabase.rpc("get_current_round", {
-      p_game_id: id,
-    });
-    if (roundData?.length) {
-      const nextRoundId = roundData[0].round_id;
-      const nextRoundIndex = roundData[0].round_index;
-      if (nextRoundId === currentRoundIdRef.current) {
-        return;
+  useEffect(() => {
+    if (state !== "ready" || roundStateReady || !gameId) return;
+    if (roundRetryRef.current) return;
+    roundRetryRef.current = window.setTimeout(async () => {
+      roundRetryRef.current = null;
+      await loadCurrentRound(gameId, supabaseClient);
+    }, 1200);
+    return () => {
+      if (roundRetryRef.current) {
+        window.clearTimeout(roundRetryRef.current);
+        roundRetryRef.current = null;
       }
-      setRoundStateReady(false);
-      setCurrentRoundId(nextRoundId);
-      setRoundIndex(nextRoundIndex);
-      setSelectedCards([]);
-      setHasSubmitted(false);
-      setSubmittedScore(null);
-      setSubmittedFlip7Bonus(false);
-      setAllSubmitted(false);
-      setAllSubmittedRoundId("");
-      setRoundScores([]);
-      await refreshRoundState(supabase, nextRoundId);
-    }
-  };
+    };
+  }, [gameId, roundStateReady, state, supabaseClient]);
 
-  const refreshRoundState = async (
-    supabase = supabaseClient,
-    roundId = currentRoundId,
-  ) => {
-    if (!gameId || !roundId) return;
-    const { data: canAdvance } = await supabase.rpc("can_advance_round", {
-      p_game_id: gameId,
-    });
-    const { data: scoresData, error: scoresError } = await supabase
-      .from("round_scores")
-      .select("player_id, score, flip7_bonus")
-      .eq("round_id", roundId);
-    if (scoresError) {
-      console.error("[game] round_scores error", scoresError);
-    }
-    setRoundScores(scoresData ?? []);
-    const currentPlayerScore = scoresData?.find(
-      (score) => score.player_id === currentPlayerIdRef.current,
-    );
-    if (currentPlayerScore) {
-      setHasSubmitted(true);
-      setSelectedCards([]);
-      setSubmittedScore(currentPlayerScore.score);
-      setSubmittedFlip7Bonus(!!currentPlayerScore.flip7_bonus);
-    }
-    const scoresCount = scoresData?.length ?? 0;
-    const everyoneSubmitted =
-      scoresCount > 0 &&
-      playersCountRef.current > 0 &&
-      scoresCount >= playersCountRef.current;
-    if (scoresCount === 0) {
-      setAllSubmitted(false);
-      setAllSubmittedRoundId("");
-    } else if (allSubmittedRoundId === roundId) {
-      setAllSubmitted(true);
-    } else {
-      const nextAllSubmitted = !!canAdvance || everyoneSubmitted;
-      setAllSubmitted(nextAllSubmitted);
-      if (nextAllSubmitted) {
-        setAllSubmittedRoundId(roundId);
+  const loadPlayers = useCallback(
+    async (
+      id: string,
+      playerId: string,
+      supabase = supabaseClient,
+    ) => {
+      const { data: playersData } = await supabase
+        .from("players")
+        .select("id, name, status, avatar, color")
+        .eq("game_id", id)
+        .order("seat_order", { ascending: true });
+      setPlayers(playersData ?? []);
+      playersCountRef.current = playersData?.length ?? 0;
+      const current = playersData?.find((player) => player.id === playerId);
+      if (current) {
+        setCurrentPlayer(current);
       }
-    }
-    const { data: totalsData, error: totalsError } = await supabase.rpc(
-      "get_game_totals",
+    },
+    [supabaseClient],
+  );
+
+  const refreshRoundState = useCallback(
+    async (
+      supabase = supabaseClient,
+      roundId = currentRoundId,
+      gameIdOverride?: string,
+    ) => {
+      const activeGameId = gameIdOverride ?? gameId;
+      if (!activeGameId || !roundId) return;
+      const { data: canAdvance } = await supabase.rpc("can_advance_round", {
+        p_game_id: activeGameId,
+      });
+      const { data: scoresData, error: scoresError } = await supabase
+        .from("round_scores")
+        .select("player_id, score, flip7_bonus")
+        .eq("round_id", roundId);
+      if (scoresError) {
+        console.error("[game] round_scores error", scoresError);
+      }
+      setRoundScores(scoresData ?? []);
+      const currentPlayerScore = scoresData?.find(
+        (score) => score.player_id === currentPlayerIdRef.current,
+      );
+      if (currentPlayerScore) {
+        setHasSubmitted(true);
+        setSelectedCards([]);
+        setSubmittedScore(currentPlayerScore.score);
+        setSubmittedFlip7Bonus(!!currentPlayerScore.flip7_bonus);
+      }
+      const scoresCount = scoresData?.length ?? 0;
+      const activePlayersCount = playersRef.current.filter((player) => {
+        if (!player.status) return true;
+        return player.status !== "left" && player.status !== "busted";
+      }).length;
+      const requiredPlayersCount =
+        activePlayersCount > 0 ? activePlayersCount : playersCountRef.current;
+      const everyoneSubmitted =
+        scoresCount > 0 &&
+        requiredPlayersCount > 0 &&
+        scoresCount >= requiredPlayersCount;
+      if (scoresCount === 0) {
+        setAllSubmitted(false);
+        setAllSubmittedRoundId("");
+      } else if (allSubmittedRoundId === roundId) {
+        setAllSubmitted(true);
+      } else {
+        const nextAllSubmitted = !!canAdvance || everyoneSubmitted;
+        setAllSubmitted(nextAllSubmitted);
+        if (nextAllSubmitted) {
+          setAllSubmittedRoundId(roundId);
+        }
+      }
+      const { data: totalsData, error: totalsError } = await supabase.rpc(
+        "get_game_totals",
+        {
+          p_game_id: activeGameId,
+        },
+      );
+      if (totalsError) {
+        console.error("[game] get_game_totals error", totalsError);
+      }
+      setTotals(totalsData ?? []);
+      setRoundStateReady(true);
+    },
+    [allSubmittedRoundId, currentRoundId, gameId, supabaseClient],
+  );
+
+  const loadCurrentRound = useCallback(
+    async (id: string, supabase = supabaseClient) => {
+      const { data: roundData } = await supabase.rpc("get_current_round", {
+        p_game_id: id,
+      });
+      if (roundData?.length) {
+        const nextRoundId = roundData[0].round_id;
+        const nextRoundIndex = roundData[0].round_index;
+        if (nextRoundId === currentRoundIdRef.current) {
+          return;
+        }
+        setRoundStateReady(false);
+        setIsRoundTransitioning(true);
+        setCurrentRoundId(nextRoundId);
+        setRoundIndex(nextRoundIndex);
+        setSelectedCards([]);
+        setHasSubmitted(false);
+        setSubmittedScore(null);
+        setSubmittedFlip7Bonus(false);
+        setAllSubmitted(false);
+        setAllSubmittedRoundId("");
+        setRoundScores([]);
+        roundCompleteBroadcastRef.current = "";
+        bustedSubmitRoundRef.current = "";
+        await refreshRoundState(supabase, nextRoundId, id);
+        await loadPlayers(id, currentPlayerIdRef.current, supabase);
+        setIsRoundTransitioning(false);
+      }
+    },
+    [loadPlayers, refreshRoundState, supabaseClient],
+  );
+
+  const realtimePostgresHandlers = useMemo(() => {
+    if (!gameId || !currentPlayerId) return [];
+    const handlers = [
       {
-        p_game_id: gameId,
+        filter: {
+          event: "UPDATE",
+          schema: "public",
+          table: "games",
+          filter: `id=eq.${gameId}`,
+        },
+        onChange: async () => {
+          const { data: game } = await supabaseClient
+            .from("games")
+            .select("status, host_player_id")
+            .eq("id", gameId)
+            .maybeSingle();
+          if (game?.status) {
+            setGameStatus(game.status);
+          }
+          if (game?.host_player_id) {
+            setHostPlayerId(game.host_player_id);
+          }
+        },
       },
-    );
-    if (totalsError) {
-      console.error("[game] get_game_totals error", totalsError);
+      {
+        filter: {
+          event: "*",
+          schema: "public",
+          table: "players",
+          filter: `game_id=eq.${gameId}`,
+        },
+        onChange: async (payload: { eventType?: string; new?: Record<string, unknown> }) => {
+          if (payload.eventType === "UPDATE" && payload.new) {
+            const nextPlayer = payload.new as Player;
+            setPlayers((prev) =>
+              prev.map((player) =>
+                player.id === nextPlayer.id ? { ...player, ...nextPlayer } : player,
+              ),
+            );
+            setCurrentPlayer((prev) =>
+              prev?.id === nextPlayer.id ? { ...prev, ...nextPlayer } : prev,
+            );
+          }
+          await loadPlayers(gameId, currentPlayerId, supabaseClient);
+        },
+      },
+      {
+        filter: {
+          event: "INSERT",
+          schema: "public",
+          table: "rounds",
+          filter: `game_id=eq.${gameId}`,
+        },
+        onChange: async () => {
+          await loadCurrentRound(gameId, supabaseClient);
+        },
+      },
+    ];
+
+    if (currentRoundId) {
+      handlers.push({
+        filter: {
+          event: "*",
+          schema: "public",
+          table: "round_scores",
+          filter: `round_id=eq.${currentRoundId}`,
+        },
+        onChange: async () => {
+          await refreshRoundState(supabaseClient);
+        },
+      });
     }
-    setTotals(totalsData ?? []);
-    setRoundStateReady(true);
+
+    return handlers;
+  }, [
+    currentPlayerId,
+    currentRoundId,
+    gameId,
+    loadCurrentRound,
+    loadPlayers,
+    refreshRoundState,
+    supabaseClient,
+  ]);
+
+  const realtimeBroadcastHandlers = useMemo(
+    () => [
+      {
+        event: "player_status",
+        onMessage: ({ payload }: { payload?: unknown }) => {
+          const nextPayload = payload as
+            | { playerId?: string; status?: Player["status"] }
+            | undefined;
+          const playerId = nextPayload?.playerId;
+          const status = nextPayload?.status;
+          if (!playerId || !status) return;
+          setPlayers((prev) =>
+            prev.map((player) =>
+              player.id === playerId ? { ...player, status } : player,
+            ),
+          );
+          setCurrentPlayer((prev) =>
+            prev?.id === playerId ? { ...prev, status } : prev,
+          );
+        },
+      },
+      {
+        event: "round_complete",
+        onMessage: ({ payload }) => {
+          const roundId = (payload as { roundId?: string } | undefined)?.roundId;
+          if (!roundId || roundId !== currentRoundIdRef.current) return;
+          setAllSubmitted(true);
+          setAllSubmittedRoundId(roundId);
+        },
+      },
+      {
+        event: "rematch",
+        onMessage: ({ payload }) => {
+          const nextCode = (payload as { code?: string } | undefined)?.code;
+          if (!nextCode) return;
+          router.replace(`/lobby/${nextCode}`);
+        },
+      },
+      {
+        event: "round_refresh",
+        onMessage: async ({ payload }) => {
+          const nextPayload = payload as
+            | { roundId?: string; gameId?: string }
+            | undefined;
+          if (nextPayload?.gameId && nextPayload.gameId !== gameId) return;
+          const nextRoundId = nextPayload?.roundId ?? currentRoundIdRef.current;
+          if (!nextRoundId) return;
+          await refreshRoundState(supabaseClient, nextRoundId, gameId);
+        },
+      },
+      {
+        event: "round_started",
+        onMessage: async ({ payload }) => {
+          const nextGameId = (payload as { gameId?: string } | undefined)?.gameId;
+          if (nextGameId && nextGameId !== gameId) return;
+          await loadCurrentRound(gameId, supabaseClient);
+        },
+      },
+      {
+        event: "players_reset",
+        onMessage: async ({ payload }) => {
+          const nextGameId = (payload as { gameId?: string } | undefined)?.gameId;
+          if (nextGameId && nextGameId !== gameId) return;
+          await loadPlayers(gameId, currentPlayerIdRef.current, supabaseClient);
+        },
+      },
+    ],
+    [gameId, loadCurrentRound, refreshRoundState, router, supabaseClient],
+  );
+
+  const { broadcastMessage } = useRealtimeChannel({
+    supabase: supabaseClient,
+    key: gameId ? `game:${gameId}` : "",
+    enabled: !!gameId && !!currentPlayerId,
+    postgres: realtimePostgresHandlers,
+    broadcast: realtimeBroadcastHandlers,
+    onStatusChange: (status) => {
+      if (status === "SUBSCRIBED") {
+        console.info("[game] channel status:", status);
+      }
+    },
+    onError: (status) => {
+      console.warn("[game] realtime issue, resubscribing", status);
+    },
+  });
+
+  const broadcastRoundRefresh = (roundId = currentRoundId) => {
+    if (!roundId || !gameId) return;
+    broadcastMessage("round_refresh", { roundId, gameId });
   };
 
   const toggleCard = (label: string) => {
@@ -559,6 +658,8 @@ export default function GamePage() {
     setHasSubmitted(true);
     setSubmittedScore(total);
     setSubmittedFlip7Bonus(isFlip7Bonus);
+    await refreshRoundState(supabase, currentRoundId);
+    broadcastRoundRefresh(currentRoundId);
   };
 
   const handleNextRound = async () => {
@@ -582,11 +683,22 @@ export default function GamePage() {
       setState("error");
       return;
     }
+    await loadPlayers(gameId, currentPlayerId, supabase);
     await loadCurrentRound(gameId, supabase);
+    broadcastMessage("round_started", { gameId });
+    broadcastMessage("players_reset", { gameId });
   };
 
   const handleBustPlayer = async (playerId: string) => {
     if (!currentPlayerId || currentPlayerId !== hostPlayerId) return;
+    setPlayers((prev) =>
+      prev.map((player) =>
+        player.id === playerId ? { ...player, status: "busted" } : player,
+      ),
+    );
+    setCurrentPlayer((prev) =>
+      prev?.id === playerId ? { ...prev, status: "busted" } : prev,
+    );
     const supabase = supabaseClient;
     const { error: updateError } = await supabase
       .from("players")
@@ -595,11 +707,29 @@ export default function GamePage() {
     if (updateError) {
       setError(updateError.message);
       setState("error");
+      setPlayers((prev) =>
+        prev.map((player) =>
+          player.id === playerId ? { ...player, status: "active" } : player,
+        ),
+      );
+      setCurrentPlayer((prev) =>
+        prev?.id === playerId ? { ...prev, status: "active" } : prev,
+      );
+      return;
     }
+    broadcastMessage("player_status", { playerId, status: "busted" });
   };
 
   const handleFreezePlayer = async (playerId: string) => {
     if (!currentPlayerId || currentPlayerId !== hostPlayerId) return;
+    setPlayers((prev) =>
+      prev.map((player) =>
+        player.id === playerId ? { ...player, status: "frozen" } : player,
+      ),
+    );
+    setCurrentPlayer((prev) =>
+      prev?.id === playerId ? { ...prev, status: "frozen" } : prev,
+    );
     const supabase = supabaseClient;
     const { error: updateError } = await supabase
       .from("players")
@@ -608,7 +738,40 @@ export default function GamePage() {
     if (updateError) {
       setError(updateError.message);
       setState("error");
+      setPlayers((prev) =>
+        prev.map((player) =>
+          player.id === playerId ? { ...player, status: "active" } : player,
+        ),
+      );
+      setCurrentPlayer((prev) =>
+        prev?.id === playerId ? { ...prev, status: "active" } : prev,
+      );
+      return;
     }
+    broadcastMessage("player_status", { playerId, status: "frozen" });
+  };
+
+  const handleClearPlayerStatus = async (playerId: string) => {
+    if (!currentPlayerId || currentPlayerId !== hostPlayerId) return;
+    setPlayers((prev) =>
+      prev.map((player) =>
+        player.id === playerId ? { ...player, status: "active" } : player,
+      ),
+    );
+    setCurrentPlayer((prev) =>
+      prev?.id === playerId ? { ...prev, status: "active" } : prev,
+    );
+    const supabase = supabaseClient;
+    const { error: updateError } = await supabase
+      .from("players")
+      .update({ status: "active" })
+      .eq("id", playerId);
+    if (updateError) {
+      setError(updateError.message);
+      setState("error");
+      return;
+    }
+    broadcastMessage("player_status", { playerId, status: "active" });
   };
 
   const handlePlayAgain = async () => {
@@ -659,11 +822,7 @@ export default function GamePage() {
       }
     }
 
-    await channelRef.current?.send({
-      type: "broadcast",
-      event: "rematch",
-      payload: { code: rematch.code },
-    });
+    broadcastMessage("rematch", { code: rematch.code });
 
     router.replace(`/lobby/${rematch.code}`);
   };
@@ -676,7 +835,7 @@ export default function GamePage() {
   const displayFlip7 = hasSubmitted
     ? submittedFlip7Bonus
     : scoreSummary.isFlip7Bonus;
-  const scoreSize = hasSubmitted ? "large" : "default";
+  const scoreSize = "large";
   const sortedTotals = [...totals].sort(
     (a, b) => b.total_score - a.total_score,
   );
@@ -685,6 +844,39 @@ export default function GamePage() {
   const currentStatus = players.find(
     (player) => player.id === currentPlayerId,
   )?.status;
+
+  useEffect(() => {
+    if (!isHost || !allSubmitted || !currentRoundId) return;
+    if (roundCompleteBroadcastRef.current === currentRoundId) return;
+    roundCompleteBroadcastRef.current = currentRoundId;
+    broadcastMessage("round_complete", { roundId: currentRoundId });
+  }, [allSubmitted, broadcastMessage, currentRoundId, isHost]);
+
+  useEffect(() => {
+    if (currentStatus !== "busted") return;
+    if (!allSubmitted || hasSubmitted || !currentRoundId) return;
+    if (bustedSubmitRoundRef.current === currentRoundId) return;
+    const supabase = supabaseClient;
+    const submitBustedScore = async () => {
+      bustedSubmitRoundRef.current = currentRoundId;
+      const { error: submitError } = await supabase.rpc("submit_score", {
+        p_round_id: currentRoundId,
+        p_score: 0,
+        p_flip7_bonus: false,
+      });
+      if (submitError) {
+        bustedSubmitRoundRef.current = "";
+        console.error("[game] busted submit_score failed", submitError);
+        return;
+      }
+      setHasSubmitted(true);
+      setSubmittedScore(0);
+      setSubmittedFlip7Bonus(false);
+      await refreshRoundState(supabase, currentRoundId);
+      broadcastRoundRefresh(currentRoundId);
+    };
+    submitBustedScore();
+  }, [allSubmitted, currentRoundId, currentStatus, hasSubmitted, supabaseClient]);
 
   useEffect(() => {
     if (!isGameOver || !winner) return;
@@ -920,41 +1112,44 @@ export default function GamePage() {
       error={sessionError}
       loadingFallback={<GameSessionLoading />}
     >
-      <main className="relative h-svh overflow-x-hidden overflow-y-auto pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] text-slate-900 dark:text-slate-100">
-      {currentStatus === "busted" && !isHost && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-[#ff3b52] text-center font-ballpill text-4xl font-bold uppercase tracking-[0.35em] text-white shadow-[inset_0_0_60px_rgba(0,0,0,0.25)] sm:text-5xl">
-          Busted
-        </div>
-      )}
+      <main className="relative flex h-svh flex-col overflow-x-hidden overflow-y-auto pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] text-slate-900 dark:text-slate-100">
+        {currentStatus === "busted" &&
+          !isHost &&
+          !allSubmitted &&
+          roundStateReady && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center bg-[#ff3b52] text-center font-ballpill text-4xl font-bold uppercase tracking-[0.35em] text-white shadow-[inset_0_0_60px_rgba(0,0,0,0.25)] sm:text-5xl">
+            Busted
+          </div>
+        )}
 
-      <div className="relative mx-auto flex w-full max-w-5xl flex-1 flex-col gap-4 px-4 pb-6 pt-0 sm:gap-6 sm:px-6 sm:pb-10 md:gap-4 md:pb-6">
-        <div className="sticky top-0 z-40 -mx-4 border-b border-white/20 bg-transparent px-4 py-4 backdrop-blur-lg dark:border-white/5 sm:-mx-6 sm:px-6 md:py-3">
-          <AppHeader
-            rightSlot={
-              <div className="flex items-center gap-2 rounded-full border-2 border-[#1f2b7a] bg-white/90 pl-3 pr-1 py-1 shadow-[0_12px_24px_rgba(31,43,122,0.2)] backdrop-blur dark:border-[#7ce7ff]/50 dark:bg-slate-950/70 sm:gap-3">
-                <div className="max-w-[120px] truncate text-xs font-semibold text-[#1f2b7a] dark:text-[#7ce7ff] sm:max-w-none sm:text-sm">
-                  {currentPlayer?.name ?? "Loading..."}
+        <div className="relative mx-auto flex w-full max-w-5xl flex-1 flex-col gap-4 px-4 pb-6 pt-0 sm:gap-6 sm:px-6 sm:pb-10 md:gap-4 md:pb-6">
+          <div className="sticky top-0 z-40 -mx-4 border-b border-white/20 bg-transparent px-4 py-4 backdrop-blur-lg dark:border-white/5 sm:-mx-6 sm:px-6 md:py-3">
+            <AppHeader
+              rightSlot={
+                <div className="flex items-center gap-2 rounded-full border-2 border-[#1f2b7a] bg-white/90 pl-3 pr-1 py-1 shadow-[0_12px_24px_rgba(31,43,122,0.2)] backdrop-blur dark:border-[#7ce7ff]/50 dark:bg-slate-950/70 sm:gap-3">
+                  <div className="max-w-[120px] truncate text-xs font-semibold text-[#1f2b7a] dark:text-[#7ce7ff] sm:max-w-none sm:text-sm">
+                    {currentPlayer?.name ?? "Loading..."}
+                  </div>
+                  <div
+                    className={`flex items-center justify-center rounded-full text-sm font-semibold text-white shadow-lg ${getAvatarClass(
+                      currentPlayer?.id ?? currentPlayer?.name ?? "you",
+                      currentPlayer?.color,
+                    )}`}
+                    style={{
+                      width: AVATAR_SIZE - 28,
+                      height: AVATAR_SIZE - 28,
+                    }}
+                  >
+                    {getAvatarLabel(
+                      currentPlayer?.name ?? "",
+                      currentPlayer?.avatar ?? null,
+                    )}
+                  </div>
                 </div>
-                <div
-                  className={`flex items-center justify-center rounded-full text-sm font-semibold text-white shadow-lg ${getAvatarClass(
-                    currentPlayer?.id ?? currentPlayer?.name ?? "you",
-                    currentPlayer?.color,
-                  )}`}
-                  style={{
-                    width: AVATAR_SIZE - 28,
-                    height: AVATAR_SIZE - 28,
-                  }}
-                >
-                  {getAvatarLabel(
-                    currentPlayer?.name ?? "",
-                    currentPlayer?.avatar ?? null,
-                  )}
-                </div>
-              </div>
-            }
-          />
-        </div>
-        <div className="pt-2 sm:pt-4">
+              }
+            />
+          </div>
+          <div className="flex min-h-0 flex-1 flex-col pt-2 sm:pt-4">
 
         {!allSubmitted && roundStateReady && (
           <div className="flex justify-center">
@@ -1088,6 +1283,9 @@ export default function GamePage() {
                     (score) => score.player_id === player.player_id,
                   );
                   const roundScore = round?.score ?? 0;
+                  const playerStatus = players.find(
+                    (item) => item.id === player.player_id,
+                  )?.status;
                   return (
                     <div
                       key={player.player_id}
@@ -1114,9 +1312,15 @@ export default function GamePage() {
                             {player.name}
                           </p>
                           <div className="mt-1 flex flex-wrap items-center gap-2">
-                            <span className="rounded-full bg-[#ffedf3] px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.2em] text-[#ff6b99] dark:bg-pink-500/15 dark:text-pink-200">
-                              Round +{roundScore}
-                            </span>
+                            {roundScore === 0 && playerStatus === "busted" ? (
+                              <span className="rounded-full bg-[#ff3b52] px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.2em] text-white shadow-[0_8px_18px_rgba(255,59,82,0.35)]">
+                                Busted
+                              </span>
+                            ) : (
+                              <span className="rounded-full bg-[#ffedf3] px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.2em] text-[#ff6b99] dark:bg-pink-500/15 dark:text-pink-200">
+                                Round +{roundScore}
+                              </span>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -1150,155 +1354,196 @@ export default function GamePage() {
           </section>
         ) : (
           !allSubmitted && (
-            <div
-              className={`flex min-h-0 flex-1 flex-col gap-4 sm:gap-6 lg:grid lg:grid-cols-[0.9fr_1.1fr] lg:content-center ${
-                hasSubmitted ? "lg:items-stretch" : "lg:items-center"
-              }`}
-            >
-              <div
-                className={`flex items-center justify-center ${
-                  hasSubmitted ? "flex-1 lg:justify-center" : "lg:justify-start"
-                }`}
-              >
-                <GameScoreDisplay
-                  score={displayScore}
-                  isFlip7Bonus={displayFlip7}
-                  size={scoreSize}
-                />
-              </div>
-              <div className="mt-auto flex flex-col gap-4 sm:gap-6 lg:mt-0">
-                {!hasSubmitted && (
-                  <div className="cards-panel cards-scale origin-top">
-                    <GameCardGrid
-                      numberCards={NUMBER_CARDS}
-                      modifierCards={MODIFIER_CARDS}
-                      selectedCards={selectedCards}
-                      onToggleCard={toggleCard}
-                    />
+            <div className="flex min-h-0 flex-1">
+              <div className="flex w-full flex-1 flex-col gap-4 sm:gap-6 lg:grid lg:grid-cols-[0.9fr_1.1fr] lg:items-center">
+                <div className="flex flex-1 items-center justify-center lg:flex-none lg:justify-center">
+                  <div className="relative flex items-center justify-center pointer-events-none">
+                    <AnimatePresence>
+                      {currentStatus === "frozen" && !isRoundTransitioning && (
+                        <motion.img
+                          key="frozen-score"
+                          src="/assets/img/frozen-score.png"
+                          alt=""
+                          className="pointer-events-none absolute left-1/2 top-1/2 z-0 h-auto w-[190px] -translate-x-1/2 -translate-y-1/2 object-contain sm:w-[240px]"
+                          initial={{ opacity: 0, scale: 0.92, y: 8 }}
+                          animate={{ opacity: 1, scale: 1, y: 0 }}
+                          exit={{ opacity: 0, scale: 0.95, y: 6 }}
+                          transition={{ duration: 0.2, ease: "easeOut" }}
+                        />
+                      )}
+                    </AnimatePresence>
+                    <div className="relative z-10">
+                      <GameScoreDisplay
+                        score={displayScore}
+                        isFlip7Bonus={displayFlip7}
+                        size={scoreSize}
+                        textClassName={
+                          currentStatus === "frozen"
+                            ? "text-white"
+                            : undefined
+                        }
+                        numberScaleClassName="scale-[1.35] inline-block"
+                      />
+                    </div>
                   </div>
-                )}
-                <div className="flex items-center gap-3">
-                  <Button
-                    onClick={handleSubmitScore}
-                    disabled={hasSubmitted}
-                    variant="gummyOrange"
-                    className="flex-1 h-12 text-base uppercase tracking-[0.2em]"
-                  >
-                    {hasSubmitted
-                      ? "Waiting for other players..."
-                      : "Submit Score"}
-                  </Button>
-                  {isHost && (
-                    <Drawer>
-                      <DrawerTrigger asChild>
-                        <Button
-                          type="button"
-                          variant="gummyBlue"
-                          className="h-12 w-12 p-0"
-                        >
-                          <Users className="h-5 w-5" />
-                        </Button>
-                      </DrawerTrigger>
-                      <DrawerContent className="border-t-[3px] border-[#1f2b7a] bg-white shadow-[0_-25px_60px_rgba(31,43,122,0.28)] dark:border-[#7ce7ff] dark:bg-[#0f1729]">
-                        <DrawerTitle className="sr-only">
-                          Host Controls
-                        </DrawerTitle>
-                        <div className="px-6 pb-[calc(env(safe-area-inset-bottom)+3.5rem)] pt-3">
-                          <div className="pointer-events-none mx-auto mb-5 h-1.5 w-12 rounded-full bg-[#1f2b7a]/20 dark:bg-[#7ce7ff]/30" />
-
-                          <div className="space-y-3">
-                            {players.map((player) => (
-                              <div
-                                key={player.id}
-                                className="group flex items-center justify-between gap-4 rounded-[24px] border-2 border-[#1f2b7a] bg-white p-3 shadow-[0_8px_20px_rgba(31,43,122,0.12)] transition-all active:scale-[0.99] dark:border-[#7ce7ff]/40 dark:bg-slate-900"
-                              >
-                                <div className="flex min-w-0 flex-1 items-center gap-3">
-                                  <div className="relative">
-                                    <AvatarBubble
-                                      seed={player.id}
-                                      name={player.name}
-                                      size={44}
-                                      avatar={player.avatar ?? null}
-                                      color={player.color ?? null}
-                                    />
-                                    {player.id === hostPlayerId && (
-                                      <div className="absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full border-2 border-white bg-[#1f2b7a] dark:border-slate-900 dark:bg-[#7ce7ff]">
-                                        <div className="h-1.5 w-1.5 rounded-full bg-white dark:bg-slate-900" />
-                                      </div>
-                                    )}
-                                  </div>
-                                  <div className="min-w-0 flex-1">
-                                    <p
-                                      className={`truncate text-base font-bold tracking-tight text-[#1f2b7a] dark:text-white ${
-                                        player.status === "busted"
-                                          ? "opacity-70"
-                                          : ""
-                                      }`}
-                                    >
-                                      {player.name}
-                                    </p>
-                                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                </div>
+                <div className="mt-auto flex flex-col gap-4 sm:gap-6 lg:mt-0 lg:justify-end">
+                  {!hasSubmitted && (
+                    <div className="cards-panel cards-scale origin-top">
+                      <GameCardGrid
+                        numberCards={NUMBER_CARDS}
+                        modifierCards={MODIFIER_CARDS}
+                        selectedCards={selectedCards}
+                        onToggleCard={toggleCard}
+                      />
+                    </div>
+                  )}
+                  <div className="flex items-center gap-3">
+                    <Button
+                      onClick={handleSubmitScore}
+                      disabled={hasSubmitted}
+                      variant="gummyOrange"
+                      className="flex-1 h-12 text-base uppercase tracking-[0.2em]"
+                    >
+                      {hasSubmitted
+                        ? "Waiting for other players..."
+                        : "Submit Score"}
+                    </Button>
+                    {isHost && (
+                      <Drawer>
+                        <DrawerTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="gummyBlue"
+                            className="h-12 w-12 p-0"
+                          >
+                            <Users className="h-5 w-5" />
+                          </Button>
+                        </DrawerTrigger>
+                        <DrawerContent className="border-t-[3px] border-[#1f2b7a] bg-white shadow-[0_-25px_60px_rgba(31,43,122,0.28)] dark:border-[#7ce7ff] dark:bg-[#0f1729]">
+                          <DrawerTitle className="sr-only">
+                            Host Controls
+                          </DrawerTitle>
+                          <div className="px-6 pb-[calc(env(safe-area-inset-bottom)+3.5rem)] pt-3">
+                            <div className="pointer-events-none mx-auto mb-5 h-1.5 w-12 rounded-full bg-[#1f2b7a]/20 dark:bg-[#7ce7ff]/30" />
+                            <div className="space-y-3">
+                              {players.map((player) => (
+                                <div
+                                  key={player.id}
+                                  className="group flex items-center justify-between gap-4 rounded-[24px] border-2 border-[#1f2b7a] bg-white p-3 shadow-[0_8px_20px_rgba(31,43,122,0.12)] transition-all active:scale-[0.99] dark:border-[#7ce7ff]/40 dark:bg-slate-900"
+                                >
+                                  <div className="flex min-w-0 flex-1 items-center gap-3">
+                                    <div className="relative">
+                                      <AvatarBubble
+                                        seed={player.id}
+                                        name={player.name}
+                                        size={44}
+                                        avatar={player.avatar ?? null}
+                                        color={player.color ?? null}
+                                      />
                                       {player.id === hostPlayerId && (
-                                        <span className="text-[10px] font-bold uppercase tracking-widest text-[#1f2b7a]/60 dark:text-[#7ce7ff]/70">
-                                          Room Host
-                                        </span>
-                                      )}
-                                      {player.status === "busted" && (
-                                        <span className="inline-flex rounded-full border border-[#ff4f70]/40 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.2em] text-[#b01d3a] dark:border-[#ff87a0]/50 dark:text-[#ffb6c4]">
-                                          Busted
-                                        </span>
-                                      )}
-                                      {player.status === "frozen" && (
-                                        <span className="inline-flex rounded-full border border-[#46d2ff]/40 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.2em] text-[#1f2b7a] dark:border-[#7ce7ff]/50 dark:text-[#cbefff]">
-                                          Frozen
-                                        </span>
+                                        <div className="absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full border-2 border-white bg-[#1f2b7a] dark:border-slate-900 dark:bg-[#7ce7ff]">
+                                          <div className="h-1.5 w-1.5 rounded-full bg-white dark:bg-slate-900" />
+                                        </div>
                                       )}
                                     </div>
+                                    <div className="min-w-0 flex-1">
+                                      <p
+                                        className={`truncate text-base font-bold tracking-tight text-[#1f2b7a] dark:text-white ${
+                                          player.status === "busted"
+                                            ? "opacity-70"
+                                            : ""
+                                        }`}
+                                      >
+                                        {player.name}
+                                      </p>
+                                      <div className="mt-1 flex flex-wrap items-center gap-2">
+                                        {player.id === hostPlayerId && (
+                                          <span className="text-[10px] font-bold uppercase tracking-widest text-[#1f2b7a]/60 dark:text-[#7ce7ff]/70">
+                                            Room Host
+                                          </span>
+                                        )}
+                                        {player.status === "busted" && (
+                                          <span className="inline-flex rounded-full border border-[#ff4f70]/40 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.2em] text-[#b01d3a] dark:border-[#ff87a0]/50 dark:text-[#ffb6c4]">
+                                            Busted
+                                          </span>
+                                        )}
+                                        {player.status === "frozen" && (
+                                          <span className="inline-flex rounded-full border border-[#46d2ff]/40 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.2em] text-[#1f2b7a] dark:border-[#7ce7ff]/50 dark:text-[#cbefff]">
+                                            Frozen
+                                          </span>
+                                        )}
+                                      </div>
+                                    </div>
                                   </div>
-                                </div>
                                 <div className="flex shrink-0 items-center gap-2">
-                                  <Button
-                                    type="button"
-                                    onClick={() => handleBustPlayer(player.id)}
-                                    disabled={
-                                      player.id === hostPlayerId ||
-                                      player.status === "busted"
-                                    }
-                                    variant="gummyRed"
-                                    className="h-10 px-5 text-[11px] tracking-wider"
-                                  >
-                                    Bust
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    onClick={() =>
-                                      handleFreezePlayer(player.id)
-                                    }
-                                    disabled={
-                                      player.id === hostPlayerId ||
-                                      player.status === "busted"
-                                    }
-                                    variant="gummyBlue"
-                                    className="h-10 px-5 text-[11px] tracking-wider"
-                                  >
-                                    Freeze
-                                  </Button>
+                                  {player.status === "busted" ? (
+                                    <Button
+                                      type="button"
+                                      onClick={() =>
+                                        handleClearPlayerStatus(player.id)
+                                      }
+                                      disabled={player.id === hostPlayerId}
+                                      variant="gummyRed"
+                                      className="h-10 w-full px-5 text-[11px] tracking-wider"
+                                    >
+                                      Undo Bust
+                                    </Button>
+                                  ) : player.status === "frozen" ? (
+                                    <Button
+                                      type="button"
+                                      onClick={() =>
+                                        handleClearPlayerStatus(player.id)
+                                      }
+                                      disabled={player.id === hostPlayerId}
+                                      variant="gummyBlue"
+                                      className="h-10 w-full px-5 text-[11px] tracking-wider"
+                                    >
+                                      Undo Freeze
+                                    </Button>
+                                  ) : (
+                                    <>
+                                      <Button
+                                        type="button"
+                                        onClick={() =>
+                                          handleBustPlayer(player.id)
+                                        }
+                                        disabled={player.id === hostPlayerId}
+                                        variant="gummyRed"
+                                        className="h-10 px-5 text-[11px] tracking-wider"
+                                      >
+                                        Bust
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        onClick={() =>
+                                          handleFreezePlayer(player.id)
+                                        }
+                                        disabled={player.id === hostPlayerId}
+                                        variant="gummyBlue"
+                                        className="h-10 px-5 text-[11px] tracking-wider"
+                                      >
+                                        Freeze
+                                      </Button>
+                                    </>
+                                  )}
                                 </div>
-                              </div>
-                            ))}
+                                </div>
+                              ))}
+                            </div>
                           </div>
-                        </div>
-                      </DrawerContent>
-                    </Drawer>
-                  )}
+                        </DrawerContent>
+                      </Drawer>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
           )
         )}
-
-      </div>
-      {isHost && !allSubmitted && currentStatus === "busted" && (
+          </div>
+        </div>
+        {isHost && !allSubmitted && currentStatus === "busted" && (
         <div className="fixed inset-x-0 bottom-0 z-40 px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] sm:px-6 sm:pb-[calc(env(safe-area-inset-bottom)+1.5rem)]">
           <div className="mx-auto flex w-full max-w-5xl items-center gap-3">
             <Button
@@ -1372,30 +1617,48 @@ export default function GamePage() {
                           </div>
                         </div>
                         <div className="flex shrink-0 items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => handleBustPlayer(player.id)}
-                            disabled={
-                              player.id === hostPlayerId ||
-                              player.status === "busted"
-                            }
-                            style={{ backgroundColor: "#ff4f70" }}
-                            className="inline-flex h-10 items-center justify-center rounded-[18px] px-5 text-[11px] font-black uppercase tracking-wider text-white shadow-[0_6px_14px_rgba(255,79,112,0.4)] transition-all hover:brightness-110 active:scale-90 disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            Bust
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleFreezePlayer(player.id)}
-                            disabled={
-                              player.id === hostPlayerId ||
-                              player.status === "busted"
-                            }
-                            style={{ backgroundColor: "#46d2ff" }}
-                            className="inline-flex h-10 items-center justify-center rounded-[18px] px-5 text-[11px] font-black uppercase tracking-wider text-[#1f2b7a] shadow-[0_6px_14px_rgba(70,210,255,0.4)] transition-all hover:brightness-110 active:scale-90 disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            Freeze
-                          </button>
+                          {player.status === "busted" ? (
+                            <button
+                              type="button"
+                              onClick={() => handleClearPlayerStatus(player.id)}
+                              disabled={player.id === hostPlayerId}
+                              style={{ backgroundColor: "#ff4f70" }}
+                              className="inline-flex h-10 w-full items-center justify-center rounded-[18px] px-5 text-[11px] font-black uppercase tracking-wider text-white shadow-[0_6px_14px_rgba(255,79,112,0.4)] transition-all hover:brightness-110 active:scale-90 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              Undo Bust
+                            </button>
+                          ) : player.status === "frozen" ? (
+                            <button
+                              type="button"
+                              onClick={() => handleClearPlayerStatus(player.id)}
+                              disabled={player.id === hostPlayerId}
+                              style={{ backgroundColor: "#46d2ff" }}
+                              className="inline-flex h-10 w-full items-center justify-center rounded-[18px] px-5 text-[11px] font-black uppercase tracking-wider text-[#1f2b7a] shadow-[0_6px_14px_rgba(70,210,255,0.4)] transition-all hover:brightness-110 active:scale-90 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              Undo Freeze
+                            </button>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => handleBustPlayer(player.id)}
+                                disabled={player.id === hostPlayerId}
+                                style={{ backgroundColor: "#ff4f70" }}
+                                className="inline-flex h-10 items-center justify-center rounded-[18px] px-5 text-[11px] font-black uppercase tracking-wider text-white shadow-[0_6px_14px_rgba(255,79,112,0.4)] transition-all hover:brightness-110 active:scale-90 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                Bust
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleFreezePlayer(player.id)}
+                                disabled={player.id === hostPlayerId}
+                                style={{ backgroundColor: "#46d2ff" }}
+                                className="inline-flex h-10 items-center justify-center rounded-[18px] px-5 text-[11px] font-black uppercase tracking-wider text-[#1f2b7a] shadow-[0_6px_14px_rgba(70,210,255,0.4)] transition-all hover:brightness-110 active:scale-90 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                Freeze
+                              </button>
+                            </>
+                          )}
                         </div>
                       </div>
                     ))}
@@ -1433,7 +1696,6 @@ export default function GamePage() {
           </div>
         </div>
       )}
-        </div>
       <style jsx>{`
         .cards-panel {
           max-height: calc(100dvh - 22rem);

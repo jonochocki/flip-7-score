@@ -19,7 +19,7 @@ export function GameCardGrid({
   onToggleCard,
 }: GameCardGridProps) {
   const cardBase =
-    "group relative flex aspect-[3/4] w-full flex-col items-center justify-between overflow-hidden rounded-[12px] border-[3px] border-[#1f2b7a] bg-[#f7f2e7] shadow-[0_10px_18px_rgba(31,43,122,0.18)] transition sm:rounded-[18px]";
+    "group relative flex aspect-[3/4] w-full flex-col items-center justify-between overflow-hidden rounded-[12px] border-[3px] border-[#1f2b7a] bg-[#f7f2e7] shadow-[0_10px_18px_rgba(31,43,122,0.18)] transition";
   const cardSelected = "border-[#1f2b7a] shadow-[0_14px_28px_rgba(15,23,42,0.35)]";
   const gradientByColor: Record<string, string> = {
     "text-neutral-900":
@@ -59,8 +59,8 @@ export function GameCardGrid({
   };
   return (
     <section className="p-0">
-      <div className="grid gap-4">
-        <div className="grid grid-cols-7 gap-1 sm:gap-3">
+      <div className="grid gap-2">
+        <div className="grid grid-cols-7 gap-2">
           {numberCards.slice(0, 7).map((card) => (
             <button
               key={card.label}
@@ -72,10 +72,8 @@ export function GameCardGrid({
                   : ""
               }`}
             >
-              <div className="absolute inset-0.5 rounded-[10px] border border-[#1f2b7a]/20 sm:inset-2 sm:rounded-[14px]" />
-              <div className="absolute left-1/2 top-1 hidden h-1 w-6 -translate-x-1/2 rounded-full border-2 border-[#1f2b7a]/70 bg-white sm:block sm:h-2 sm:w-10" />
-              <div className="absolute bottom-1 left-1/2 hidden h-1 w-6 -translate-x-1/2 rounded-full border-2 border-[#1f2b7a]/70 bg-white sm:block sm:h-2 sm:w-10" />
-              <div className="relative flex w-full flex-1 items-center justify-center pt-1 text-xl font-semibold sm:pt-4 sm:text-5xl">
+              <div className="absolute inset-0.5 rounded-[10px] border border-[#1f2b7a]/20" />
+              <div className="relative flex w-full flex-1 items-center justify-center pt-1 text-xl font-semibold lg:text-3xl">
                 <span
                   className={`font-atkinson font-bold drop-shadow-sm ${
                     selectedCards.includes(card.label) ? "text-white" : card.color
@@ -87,7 +85,7 @@ export function GameCardGrid({
             </button>
           ))}
         </div>
-        <div className="grid grid-cols-6 gap-1 sm:gap-3">
+        <div className="grid grid-cols-6 gap-2">
           {numberCards.slice(7).map((card) => (
             <button
               key={card.label}
@@ -99,10 +97,8 @@ export function GameCardGrid({
                   : ""
               }`}
             >
-              <div className="absolute inset-0.5 rounded-[10px] border border-[#1f2b7a]/20 sm:inset-2 sm:rounded-[14px]" />
-              <div className="absolute left-1/2 top-1 hidden h-1 w-6 -translate-x-1/2 rounded-full border-2 border-[#1f2b7a]/70 bg-white sm:block sm:h-2 sm:w-10" />
-              <div className="absolute bottom-1 left-1/2 hidden h-1 w-6 -translate-x-1/2 rounded-full border-2 border-[#1f2b7a]/70 bg-white sm:block sm:h-2 sm:w-10" />
-              <div className="relative flex w-full flex-1 items-center justify-center pt-1 text-xl font-semibold sm:pt-4 sm:text-5xl">
+              <div className="absolute inset-0.5 rounded-[10px] border border-[#1f2b7a]/20" />
+              <div className="relative flex w-full flex-1 items-center justify-center pt-1 text-xl font-semibold lg:text-3xl">
                 <span
                   className={`font-atkinson font-bold drop-shadow-sm ${
                     selectedCards.includes(card.label) ? "text-white" : card.color
@@ -115,7 +111,7 @@ export function GameCardGrid({
           ))}
         </div>
         <div className="h-px w-full bg-[#8dbfc5]" />
-        <div className="grid grid-cols-6 gap-1 sm:gap-3">
+        <div className="grid grid-cols-6 gap-2">
           {modifierCards.map((card) => (
             <button
               key={card.label}
@@ -127,10 +123,8 @@ export function GameCardGrid({
                   : ""
               }`}
             >
-              <div className="absolute inset-0.5 rounded-[10px] border border-[#1f2b7a]/20 sm:inset-2 sm:rounded-[14px]" />
-              <div className="absolute left-1/2 top-1 hidden h-1 w-6 -translate-x-1/2 rounded-full border-2 border-[#1f2b7a]/70 bg-white sm:block sm:h-2 sm:w-10" />
-              <div className="absolute bottom-1 left-1/2 hidden h-1 w-6 -translate-x-1/2 rounded-full border-2 border-[#1f2b7a]/70 bg-white sm:block sm:h-2 sm:w-10" />
-              <div className="relative flex w-full flex-1 items-center justify-center pt-1 text-xl font-semibold sm:pt-4 sm:text-5xl">
+              <div className="absolute inset-0.5 rounded-[10px] border border-[#1f2b7a]/20" />
+              <div className="relative flex w-full flex-1 items-center justify-center pt-1 text-xl font-semibold lg:text-3xl">
                 <span
                   className={`font-atkinson font-bold drop-shadow-sm ${
                     selectedCards.includes(card.label) ? "text-white" : card.color

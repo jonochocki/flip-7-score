@@ -67,7 +67,10 @@ export const getAvatarClass = (seed: string, color?: string | null) => {
     if (matched) return matched.className;
   }
   const hash = hashSeed(seed);
-  return AVATAR_COLORS[hash % AVATAR_COLORS.length].className;
+  return (
+    AVATAR_COLORS[hash % AVATAR_COLORS.length]?.className ??
+    AVATAR_COLORS[0].className
+  );
 };
 
 export const getAvatarLabel = (name: string, avatar?: string | null) => {

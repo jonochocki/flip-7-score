@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Button } from "@workspace/ui/components/button";
 import * as motion from "motion/react-client";
@@ -16,10 +16,14 @@ import { QrCode } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { AppHeader } from "@/components/app-header";
 import { SessionGate } from "@/components/session-gate";
-import { getAvatarClass } from "@/components/lobby-player-bubbles";
+import {
+  getAvatarClass,
+  getAvatarLabel,
+} from "@/components/lobby-player-bubbles";
 import { type LayoutMode } from "@/components/lobby-orbit-layout";
 import { LobbyPlayerOrbit } from "@/components/lobby-player-orbit";
 import { useAnonSession } from "@/hooks/use-anon-session";
+import { useRealtimeChannel } from "@/hooks/use-realtime-channel";
 
 type LobbyState = "loading" | "needs-name" | "joining" | "ready" | "error";
 type StoredPlayer = {
@@ -39,6 +43,40 @@ type StoredProfile = {
   avatar: string | null;
   color: string | null;
 };
+
+const RULES_SECTIONS = [
+  {
+    title: "Goal",
+    body: "Be first to 200 points.",
+  },
+  {
+    title: "Round Flow",
+    body: [
+      "Everyone gets 1 card face up (resolve any Action cards immediately).",
+      "On your turn: Hit (draw 1) or Stay (bank points).",
+    ],
+  },
+  {
+    title: "Bust",
+    body: "Draw a number you already have → bust (0 points this round).",
+  },
+  {
+    title: "7 Bonus",
+    body: "7 unique numbers showing ends the round and gives +15 points.",
+  },
+  {
+    title: "Action Cards",
+    body: [
+      "Freeze: target banks points and is out.",
+      "Flip Three: target draws 3 cards (stop early on bust or Flip 7).",
+      "Second Chance: discard one duplicate + this card instead of busting (only one per player).",
+    ],
+  },
+  {
+    title: "Scoring Order",
+    body: ["Add numbers.", "Apply x2 (if any).", "Add +X modifiers."],
+  },
+];
 
 const LobbySessionLoading = () => (
   <main className="relative min-h-svh overflow-hidden bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50 text-slate-900">
@@ -67,6 +105,7 @@ export default function LobbyPage() {
   const [hostPlayerId, setHostPlayerId] = useState("");
   const [isStarting, setIsStarting] = useState(false);
   const [isHostDrawerOpen, setIsHostDrawerOpen] = useState(true);
+  const [isRulesDrawerOpen, setIsRulesDrawerOpen] = useState(false);
   const [qrSize, setQrSize] = useState(260);
   const [isProfileDrawerOpen, setIsProfileDrawerOpen] = useState(false);
   const [profileName, setProfileName] = useState("");
@@ -206,35 +245,45 @@ export default function LobbyPage() {
     init();
   }, [code, router, session, sessionLoading, supabaseClient]);
 
-  useEffect(() => {
-    if (!gameId || !currentPlayerId) return;
-    const supabase = supabaseClient;
+  const loadPlayers = useCallback(
+    async (id: string, supabase = supabaseClient) => {
+      const { data: playersData } = await supabase
+        .from("players")
+        .select("id, name, avatar, color")
+        .eq("game_id", id)
+        .order("seat_order", { ascending: true });
 
-    const channel = supabase
-      .channel(`lobby:${gameId}`)
-      .on(
-        "postgres_changes",
-        {
+      if (playersData) {
+        setPlayers(playersData);
+      }
+    },
+    [supabaseClient],
+  );
+
+  const lobbyPostgresHandlers = useMemo(() => {
+    if (!gameId || !currentPlayerId) return [];
+    return [
+      {
+        filter: {
           event: "*",
           schema: "public",
           table: "players",
           filter: `game_id=eq.${gameId}`,
         },
-        () => {
+        onChange: async () => {
           console.info("[lobby] players updated, refreshing");
-          loadPlayers(gameId, supabase);
+          await loadPlayers(gameId, supabaseClient);
         },
-      )
-      .on(
-        "postgres_changes",
-        {
+      },
+      {
+        filter: {
           event: "UPDATE",
           schema: "public",
           table: "games",
           filter: `id=eq.${gameId}`,
         },
-        async () => {
-          const { data: game } = await supabase
+        onChange: async () => {
+          const { data: game } = await supabaseClient
             .from("games")
             .select("status, host_player_id")
             .eq("id", gameId)
@@ -247,15 +296,24 @@ export default function LobbyPage() {
             router.replace(`/game/${code}`);
           }
         },
-      )
-      .subscribe((status) => {
-        console.info("[lobby] channel status:", status);
-      });
+      },
+    ];
+  }, [code, currentPlayerId, gameId, loadPlayers, router, supabaseClient]);
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [code, currentPlayerId, gameId, router, supabaseClient]);
+  useRealtimeChannel({
+    supabase: supabaseClient,
+    key: gameId ? `lobby:${gameId}` : "",
+    enabled: !!gameId && !!currentPlayerId,
+    postgres: lobbyPostgresHandlers,
+    onStatusChange: (status) => {
+      if (status === "SUBSCRIBED") {
+        console.info("[lobby] channel status:", status);
+      }
+    },
+    onError: (status) => {
+      console.warn("[lobby] realtime issue, resubscribing", status);
+    },
+  });
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -278,6 +336,8 @@ export default function LobbyPage() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     const stored =
+      sessionStorage.getItem("7score_profile") ??
+      localStorage.getItem("7score_profile") ??
       sessionStorage.getItem("flip7_profile") ??
       localStorage.getItem("flip7_profile");
     if (!stored) return;
@@ -288,9 +348,18 @@ export default function LobbyPage() {
         setProfileAvatar(parsed.avatar ?? null);
         setProfileColor(parsed.color ?? null);
         setHasStoredProfile(true);
+        const nextValue = JSON.stringify({
+          name: parsed.name,
+          avatar: parsed.avatar ?? null,
+          color: parsed.color ?? null,
+        } satisfies StoredProfile);
+        sessionStorage.setItem("7score_profile", nextValue);
+        localStorage.setItem("7score_profile", nextValue);
       }
     } catch {
       try {
+        sessionStorage.removeItem("7score_profile");
+        localStorage.removeItem("7score_profile");
         sessionStorage.removeItem("flip7_profile");
         localStorage.removeItem("flip7_profile");
       } catch {
@@ -298,18 +367,6 @@ export default function LobbyPage() {
       }
     }
   }, []);
-
-  const loadPlayers = async (id: string, supabase = supabaseClient) => {
-    const { data: playersData } = await supabase
-      .from("players")
-      .select("id, name, avatar, color")
-      .eq("game_id", id)
-      .order("seat_order", { ascending: true });
-
-    if (playersData) {
-      setPlayers(playersData);
-    }
-  };
 
   const handleJoin = async () => {
     const nextName = profileName.trim();
@@ -344,8 +401,8 @@ export default function LobbyPage() {
         avatar: profileAvatar ?? null,
         color: profileColor ?? null,
       } satisfies StoredProfile);
-      sessionStorage.setItem("flip7_profile", profileValue);
-      localStorage.setItem("flip7_profile", profileValue);
+      sessionStorage.setItem("7score_profile", profileValue);
+      localStorage.setItem("7score_profile", profileValue);
     } catch {
       // Ignore storage failures.
     }
@@ -355,7 +412,7 @@ export default function LobbyPage() {
   };
 
   const currentPlayer = players.find((player) => player.id === currentPlayerId);
-  const isHost = currentPlayerId && hostPlayerId === currentPlayerId;
+  const isHost = !!currentPlayerId && hostPlayerId === currentPlayerId;
 
   const handleStartGame = async () => {
     if (!gameId || !isHost || players.length < 3) return;
@@ -429,8 +486,8 @@ export default function LobbyPage() {
         avatar: profileAvatar ?? null,
         color: profileColor ?? null,
       } satisfies StoredProfile);
-      sessionStorage.setItem("flip7_profile", profileValue);
-      localStorage.setItem("flip7_profile", profileValue);
+      sessionStorage.setItem("7score_profile", profileValue);
+      localStorage.setItem("7score_profile", profileValue);
     } catch {
       // Ignore storage failures.
     }
@@ -443,6 +500,8 @@ export default function LobbyPage() {
     setProfileColor(null);
     setHasStoredProfile(false);
     try {
+      sessionStorage.removeItem("7score_profile");
+      localStorage.removeItem("7score_profile");
       sessionStorage.removeItem("flip7_profile");
       localStorage.removeItem("flip7_profile");
     } catch {
@@ -474,7 +533,29 @@ export default function LobbyPage() {
       <main className="relative h-svh overflow-x-hidden overflow-y-auto pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] text-slate-900">
         <div className="relative mx-auto flex min-h-svh w-full max-w-5xl flex-col gap-6 px-5 pb-24 pt-0 sm:px-10 sm:pb-28 lg:px-16">
           <div className="sticky top-0 z-40 -mx-5 border-b border-white/20 bg-transparent px-5 py-4 backdrop-blur-lg sm:-mx-10 sm:px-10 md:py-3 lg:-mx-16 lg:px-16">
-            <AppHeader />
+            <AppHeader
+              onLeftClick={() => setIsRulesDrawerOpen(true)}
+              leftIcon="info"
+              rightSlot={
+                <div className="flex items-center gap-2 rounded-full border-2 border-[#1f2b7a] bg-white/90 pl-3 pr-1 py-1 shadow-[0_12px_24px_rgba(31,43,122,0.2)] backdrop-blur dark:border-[#7ce7ff]/50 dark:bg-slate-950/70 sm:gap-3">
+                  <div className="max-w-[120px] truncate text-xs font-semibold text-[#1f2b7a] dark:text-[#7ce7ff] sm:max-w-none sm:text-sm">
+                    {(currentPlayer?.name ?? "Loading...").slice(0, 15)}
+                  </div>
+                  <div
+                    className={`flex items-center justify-center rounded-full text-sm font-semibold text-white shadow-lg ${getAvatarClass(
+                      currentPlayer?.id ?? currentPlayer?.name ?? "you",
+                      currentPlayer?.color,
+                    )}`}
+                    style={{ width: 36, height: 36 }}
+                  >
+                    {getAvatarLabel(
+                      currentPlayer?.name ?? "",
+                      currentPlayer?.avatar ?? null,
+                    )}
+                  </div>
+                </div>
+              }
+            />
           </div>
           <div className="pt-2 sm:pt-4">
           {state !== "needs-name" && (
@@ -556,10 +637,10 @@ export default function LobbyPage() {
                       />
                     </div>
                     <div className="space-y-2">
-                      <p className="text-xs font-black uppercase tracking-[0.3em] text-[#ff6b99]">
+                      <p className="text-xs font-black uppercase tracking-[0.3em] text-[#ff6b99] font-atkinson">
                         Lobby Code
                       </p>
-                      <h3 className="text-3xl font-black tracking-[0.35em] text-slate-900">
+                      <h3 className="text-3xl font-black tracking-[0.35em] text-slate-900 font-atkinson">
                         {code
                           ? `${code.slice(0, 2)}-${code.slice(2, 4)}-${code.slice(
                               4,
@@ -619,6 +700,42 @@ export default function LobbyPage() {
             </div>
           </>
         )}
+
+        <Drawer open={isRulesDrawerOpen} onOpenChange={setIsRulesDrawerOpen}>
+          <DrawerContent className="rounded-t-[32px] border-0 bg-white/95 p-6 pb-8 pt-12 shadow-[0_20px_50px_rgba(255,107,153,0.2)] sm:p-8 sm:pt-14 [&>div:first-child]:hidden before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-[10px] before:rounded-t-[32px] before:bg-[linear-gradient(90deg,#ff6b99,#ffd966,#66e0ff,#a855f7,#ff6b99)]">
+            <div className="mx-auto flex w-full max-w-2xl flex-col gap-6">
+              <DrawerTitle className="text-center text-sm font-black uppercase tracking-[0.3em] text-[#ff6b99]">
+                7 Rules
+              </DrawerTitle>
+              <div className="max-h-[70svh] space-y-4 overflow-y-auto rounded-2xl bg-white/90 p-4 text-sm text-slate-700 shadow-[inset_0_1px_6px_rgba(0,0,0,0.08)] sm:p-6">
+                {RULES_SECTIONS.map((section) => (
+                  <div
+                    key={section.title}
+                    className="rounded-xl border border-white/80 bg-white/70 p-4 shadow-[0_10px_20px_rgba(15,23,42,0.08)]"
+                  >
+                    <p className="text-xs font-black uppercase tracking-[0.3em] text-[#ff6b99]">
+                      {section.title}
+                    </p>
+                    {Array.isArray(section.body) ? (
+                      <ul className="mt-3 space-y-2 text-sm font-medium text-slate-700">
+                        {section.body.map((item) => (
+                          <li key={item} className="flex gap-2">
+                            <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-[#66e0ff]" />
+                            <span>{item}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="mt-2 text-sm font-medium text-slate-700">
+                        {section.body}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </DrawerContent>
+        </Drawer>
 
         <Drawer
           open={isProfileDrawerOpen || state === "needs-name"}

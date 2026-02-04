@@ -1,9 +1,9 @@
 "use client";
 
-import { type ElementType, useState } from "react";
+import { type ElementType, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import { ArrowRight, Clock, Gamepad2, LogIn, Trophy, Users } from "lucide-react";
+import { Clock, Gamepad2, Github, LogIn, Trophy, Users } from "lucide-react";
 import { Button } from "@workspace/ui/components/button";
 import {
   Drawer,
@@ -19,9 +19,14 @@ import {
 } from "@workspace/ui/components/input-otp";
 import { Input } from "@workspace/ui/components/input";
 import { Label } from "@workspace/ui/components/label";
+import { AppHeader } from "@/components/app-header";
 import { SessionGate } from "@/components/session-gate";
 import { useAnonSession } from "@/hooks/use-anon-session";
 import { cn } from "@workspace/ui/lib/utils";
+import {
+  getAvatarClass,
+  getAvatarLabel,
+} from "@/components/lobby-player-bubbles";
 
 type StoredHostLobby = {
   gameId: string;
@@ -29,21 +34,25 @@ type StoredHostLobby = {
   playerId: string;
 };
 
+type StoredProfile = {
+  name: string;
+  avatar: string | null;
+  color: string | null;
+};
+
 type InfoPillProps = {
   icon: ElementType;
   label: string;
   color: string;
   bg: string;
+  className?: string;
 };
 
 const HomeSessionLoading = () => (
-  <main className="relative min-h-svh overflow-hidden bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50 text-slate-900">
-    <div className="pointer-events-none absolute inset-0 opacity-40 [background-image:radial-gradient(circle_at_2px_2px,rgba(79,70,229,0.18)_2px,transparent_0)] [background-size:24px_24px]" />
-    <div className="pointer-events-none absolute -top-24 left-1/2 h-80 w-80 -translate-x-1/2 rounded-full bg-gradient-to-tr from-[#ff99b8]/40 to-[#ffd966]/40 blur-3xl" />
-    <div className="pointer-events-none absolute -bottom-32 right-0 h-96 w-96 rounded-full bg-gradient-to-bl from-[#66e0ff]/40 to-[#ff99b8]/40 blur-3xl" />
+  <main className="relative min-h-svh overflow-hidden text-slate-900 dark:text-slate-100">
     <div className="relative mx-auto flex min-h-svh w-full max-w-5xl flex-col items-center justify-center gap-6 px-5 pb-24 pt-6 sm:px-10 sm:pb-28 sm:pt-10 lg:px-16">
-      <div className="rounded-full bg-gradient-to-r from-[#ff8cc3] via-[#ffd966] to-[#66e0ff] p-[3px] shadow-[0_18px_40px_-18px_rgba(255,107,153,0.5)]">
-        <div className="rounded-full bg-white/95 px-6 py-3 text-sm font-black uppercase tracking-[0.25em] text-slate-900 shadow-[inset_0_2px_0_rgba(255,255,255,0.9)]">
+      <div className="rounded-full bg-gradient-to-r from-[#ff8cc3] via-[#ffd966] to-[#66e0ff] p-[3px] shadow-[0_18px_40px_-18px_rgba(255,107,153,0.5)] dark:from-[#6a2b7a] dark:via-[#f59e0b] dark:to-[#0b4a66] dark:shadow-[0_18px_40px_-18px_rgba(236,72,153,0.45)]">
+        <div className="rounded-full bg-white/95 px-6 py-3 text-sm font-black uppercase tracking-[0.25em] text-slate-900 shadow-[inset_0_2px_0_rgba(255,255,255,0.9)] dark:bg-slate-950/90 dark:text-slate-100">
           Setting up game...
         </div>
       </div>
@@ -53,11 +62,17 @@ const HomeSessionLoading = () => (
 
 export default function Page() {
   const [isJoinDrawerOpen, setIsJoinDrawerOpen] = useState(false);
-  const [isCreateDrawerOpen, setIsCreateDrawerOpen] = useState(false);
+  const [isProfileDrawerOpen, setIsProfileDrawerOpen] = useState(false);
+  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
+  const [profileDrawerMode, setProfileDrawerMode] = useState<
+    "create" | "update"
+  >("create");
   const [lobbyCode, setLobbyCode] = useState("");
-  const [hostName, setHostName] = useState("");
   const [createError, setCreateError] = useState("");
   const [isCreating, setIsCreating] = useState(false);
+  const [profileName, setProfileName] = useState("");
+  const [profileAvatar, setProfileAvatar] = useState<string | null>(null);
+  const [profileColor, setProfileColor] = useState<string | null>(null);
   const router = useRouter();
 
   const {
@@ -66,10 +81,46 @@ export default function Page() {
     supabase: supabaseClient,
   } = useAnonSession();
 
-  
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const stored =
+      sessionStorage.getItem("7score_profile") ??
+      localStorage.getItem("7score_profile") ??
+      sessionStorage.getItem("flip7_profile") ??
+      localStorage.getItem("flip7_profile");
+    if (!stored) return;
+    try {
+      const parsed = JSON.parse(stored) as StoredProfile;
+      if (parsed?.name) {
+        setProfileName(parsed.name);
+        setProfileAvatar(parsed.avatar ?? null);
+        setProfileColor(parsed.color ?? null);
+        const nextValue = JSON.stringify({
+          name: parsed.name,
+          avatar: parsed.avatar ?? null,
+          color: parsed.color ?? null,
+        } satisfies StoredProfile);
+        sessionStorage.setItem("7score_profile", nextValue);
+        localStorage.setItem("7score_profile", nextValue);
+      }
+    } catch {
+      try {
+        sessionStorage.removeItem("7score_profile");
+        localStorage.removeItem("7score_profile");
+        sessionStorage.removeItem("flip7_profile");
+        localStorage.removeItem("flip7_profile");
+      } catch {
+        // Ignore storage failures.
+      }
+    }
+  }, []);
 
-  const handleCreateLobby = async () => {
-    if (!hostName.trim() || isCreating) return;
+  const createLobby = async (
+    nextName: string,
+    nextAvatar: string | null,
+    nextColor: string | null,
+  ) => {
+    if (!nextName.trim() || isCreating) return;
     setCreateError("");
     setIsCreating(true);
 
@@ -105,7 +156,11 @@ export default function Page() {
           if (existingGame && existingGame.status !== "finished") {
             const { error: updateError } = await supabase
               .from("players")
-              .update({ name: hostName.trim() })
+              .update({
+                name: nextName.trim(),
+                avatar: nextAvatar,
+                color: nextColor,
+              })
               .eq("id", parsed.playerId);
             if (updateError) {
               setCreateError(updateError.message);
@@ -128,9 +183,9 @@ export default function Page() {
     }
 
     const { data, error: rpcError } = await supabase.rpc("create_game", {
-      p_name: hostName.trim(),
-      p_avatar: null,
-      p_color: null,
+      p_name: nextName.trim(),
+      p_avatar: nextAvatar,
+      p_color: nextColor,
     });
 
     if (rpcError || !data?.length) {
@@ -154,10 +209,53 @@ export default function Page() {
       });
       sessionStorage.setItem(`flip7_player_${created.code}`, playerValue);
       localStorage.setItem(`flip7_player_${created.code}`, playerValue);
+      const profileValue = JSON.stringify({
+        name: nextName.trim(),
+        avatar: nextAvatar ?? null,
+        color: nextColor ?? null,
+      } satisfies StoredProfile);
+      sessionStorage.setItem("7score_profile", profileValue);
+      localStorage.setItem("7score_profile", profileValue);
     } catch {
       // Ignore storage failures.
     }
     router.push(`/lobby/${created.code}`);
+  };
+
+  const handleCreateLobby = async () => {
+    await createLobby(profileName.trim(), profileAvatar, profileColor);
+  };
+
+  const handleSaveProfile = () => {
+    if (!profileName.trim()) return;
+    setCreateError("");
+    try {
+      const profileValue = JSON.stringify({
+        name: profileName.trim(),
+        avatar: profileAvatar ?? null,
+        color: profileColor ?? null,
+      } satisfies StoredProfile);
+      sessionStorage.setItem("7score_profile", profileValue);
+      localStorage.setItem("7score_profile", profileValue);
+    } catch {
+      // Ignore storage failures.
+    }
+    setIsProfileDrawerOpen(false);
+  };
+
+  const handleNotThisUser = () => {
+    try {
+      sessionStorage.removeItem("7score_profile");
+      localStorage.removeItem("7score_profile");
+    } catch {
+      // Ignore storage failures.
+    }
+    setProfileName("");
+    setProfileAvatar(null);
+    setProfileColor(null);
+    setIsProfileMenuOpen(false);
+    setProfileDrawerMode("update");
+    setIsProfileDrawerOpen(true);
   };
 
   return (
@@ -166,114 +264,272 @@ export default function Page() {
       error={sessionError}
       loadingFallback={<HomeSessionLoading />}
     >
-      <main className="relative min-h-svh w-full overflow-hidden font-sans">
+      <main className="relative min-h-svh w-full font-sans text-slate-900 dark:text-slate-100">
+        <div className="relative z-10 flex min-h-svh w-full flex-col px-5 pb-6 pt-6 sm:px-10 sm:pb-10 sm:pt-10 lg:px-16">
+          <div className="sticky top-0 z-30 -mx-5 pb-4 pt-0 sm:-mx-10 lg:-mx-16">
+            <div className="px-5 sm:px-10 lg:px-16">
+              <AppHeader
+                showButtons={false}
+                onRightClick={() => {
+                  if (!profileName) return;
+                  setIsProfileMenuOpen(true);
+                }}
+                rightSlot={
+                  profileName ? (
+                    <button
+                      type="button"
+                      onClick={() => setIsProfileMenuOpen(true)}
+                      className="flex items-center gap-2 rounded-full border-2 border-[#1f2b7a] bg-white/90 pl-3 pr-1 py-1 shadow-[0_12px_24px_rgba(31,43,122,0.2)] backdrop-blur transition hover:brightness-105 dark:border-[#7ce7ff]/50 dark:bg-slate-950/70 sm:gap-3"
+                      aria-label="Profile menu"
+                    >
+                      <div className="max-w-[120px] truncate text-xs font-semibold text-[#1f2b7a] dark:text-[#7ce7ff] sm:max-w-none sm:text-sm">
+                        {profileName.slice(0, 15)}
+                      </div>
+                      <div
+                        className={`flex items-center justify-center rounded-full text-sm font-semibold text-white shadow-lg ${getAvatarClass(
+                          profileName,
+                          profileColor,
+                        )}`}
+                        style={{ width: 36, height: 36 }}
+                      >
+                        {getAvatarLabel(profileName, profileAvatar)}
+                      </div>
+                    </button>
+                  ) : (
+                    <div className="h-10 w-10" aria-hidden />
+                  )
+                }
+              />
+            </div>
+          </div>
 
-        <div className="relative z-10 flex min-h-svh w-full flex-col justify-center gap-10 px-5 py-6 sm:px-10 sm:py-10 lg:px-16">
-          <div className="grid w-full gap-10 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
+          <div className="flex flex-1 items-center">
+            <div className="w-full">
+              <div className="grid w-full gap-10 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
             <section className="space-y-6 text-center lg:text-left">
-              <div className="flex flex-col items-center space-y-3 lg:items-start">
+              <div className="flex justify-center lg:justify-start">
                 <Image
-                  src="/assets/img/7-score-logo.png"
-                  alt="7 Score"
+                  src="/assets/img/card-fan.png"
+                  alt=""
                   width={520}
-                  height={180}
-                  className="h-32 w-auto object-contain sm:h-20"
+                  height={320}
+                  className="h-40 w-auto object-contain sm:h-48"
                   priority
                 />
-                <p className="text-base font-bold uppercase tracking-[0.3em] text-indigo-300">
-                  Press Your Luck
+              </div>
+
+              <div className="space-y-2">
+                <h1 className="text-2xl font-black tracking-tight text-slate-900 dark:text-slate-100 sm:text-3xl">
+                  Scorekeeper for your game night
+                </h1>
+                <p className="mx-auto max-w-xl text-base font-medium text-slate-600 dark:text-slate-300 lg:mx-0 lg:text-lg">
+                  Fast rounds, clean totals, and zero fuss at the table.
                 </p>
               </div>
 
-              <p className="mx-auto max-w-xl text-lg text-slate-600 lg:mx-0 lg:text-xl">
-                Start a new lobby or jump into a friend&apos;s game with a quick
-                code scan.
-              </p>
+            </section>
 
-              <div className="flex flex-wrap justify-center gap-3 lg:justify-start">
+            <section className="w-full">
+              <div className="space-y-4">
+                    <Button
+                      onClick={() => {
+                        setCreateError("");
+                        if (profileName) {
+                          createLobby(
+                            profileName,
+                            profileAvatar,
+                            profileColor,
+                          );
+                          return;
+                        }
+                        setProfileDrawerMode("create");
+                        setIsProfileDrawerOpen(true);
+                      }}
+                      variant="gummyOrange"
+                      className="h-[72px] w-full text-3xl"
+                    >
+                  <span className="flex items-center gap-3">
+                    <Gamepad2 className="h-8 w-8 stroke-[3.5]" />
+                    New Game
+                  </span>
+                </Button>
+
+                <Button
+                  onClick={() => setIsJoinDrawerOpen(true)}
+                  variant="gummyBlue"
+                  className="h-[72px] w-full text-3xl"
+                >
+                  <span className="flex items-center gap-3">
+                    <LogIn className="h-8 w-8 stroke-[3.5]" />
+                    Join Game
+                  </span>
+                </Button>
+              </div>
+
+              <div className="mt-6 grid w-full grid-cols-3 gap-2">
                 <InfoPill
                   icon={Trophy}
                   label="Race to 200"
-                  color="text-white"
-                  bg="border-amber-500 bg-gradient-to-b from-amber-300 via-orange-400 to-amber-500 shadow-[0_8px_0_rgba(180,95,20,0.35),0_16px_28px_rgba(255,166,92,0.25)]"
+                  color="text-amber-600 dark:text-amber-300"
+                  bg="border-amber-500 bg-white shadow-[0_8px_0_rgba(180,95,20,0.25),0_16px_28px_rgba(255,166,92,0.15)] dark:border-amber-400 dark:bg-slate-900 dark:shadow-[0_8px_0_rgba(251,191,36,0.2),0_16px_28px_rgba(15,23,42,0.5)]"
+                  className="min-w-0 justify-center px-2 py-1 text-[10px] sm:text-xs"
                 />
                 <InfoPill
                   icon={Users}
                   label="3+ Players"
-                  color="text-white"
-                  bg="border-sky-600 bg-gradient-to-b from-sky-300 via-sky-500 to-blue-600 shadow-[0_8px_0_rgba(30,110,170,0.35),0_16px_28px_rgba(96,165,250,0.25)]"
+                  color="text-sky-600 dark:text-sky-300"
+                  bg="border-sky-600 bg-white shadow-[0_8px_0_rgba(30,110,170,0.25),0_16px_28px_rgba(96,165,250,0.15)] dark:border-sky-400 dark:bg-slate-900 dark:shadow-[0_8px_0_rgba(56,189,248,0.2),0_16px_28px_rgba(15,23,42,0.5)]"
+                  className="min-w-0 justify-center px-2 py-1 text-[10px] sm:text-xs"
                 />
                 <InfoPill
                   icon={Clock}
                   label="20 Min"
-                  color="text-white"
-                  bg="border-fuchsia-500 bg-gradient-to-b from-fuchsia-300 via-fuchsia-500 to-purple-600 shadow-[0_8px_0_rgba(120,60,160,0.35),0_16px_28px_rgba(200,120,255,0.25)]"
+                  color="text-fuchsia-600 dark:text-fuchsia-300"
+                  bg="border-fuchsia-500 bg-white shadow-[0_8px_0_rgba(120,60,160,0.25),0_16px_28px_rgba(200,120,255,0.15)] dark:border-fuchsia-400 dark:bg-slate-900 dark:shadow-[0_8px_0_rgba(217,70,239,0.2),0_16px_28px_rgba(15,23,42,0.5)]"
+                  className="min-w-0 justify-center px-2 py-1 text-[10px] sm:text-xs"
                 />
               </div>
             </section>
-
-            <section className="w-full">
-              <div className="mx-auto w-full max-w-md rounded-3xl p-6 sm:border-2 sm:border-indigo-50 sm:bg-white/90 sm:shadow-lg sm:shadow-indigo-100/50 sm:backdrop-blur lg:mx-0">
-                <div className="space-y-4">
-                  <Button
-                    onClick={() => {
-                      setCreateError("");
-                      setIsCreateDrawerOpen(true);
-                    }}
-                    variant="gummyOrange"
-                    className="h-[72px] w-full text-3xl"
-                  >
-                    <span className="flex items-center gap-3">
-                      <Gamepad2 className="h-8 w-8 stroke-[3.5]" />
-                      New Game
-                    </span>
-                  </Button>
-
-                  <Button
-                    onClick={() => setIsJoinDrawerOpen(true)}
-                    variant="gummyBlue"
-                    className="h-[72px] w-full text-3xl"
-                  >
-                    <span className="flex items-center gap-3">
-                      <LogIn className="h-8 w-8 stroke-[3.5]" />
-                      Join Game
-                    </span>
-                  </Button>
-                </div>
               </div>
-            </section>
+            </div>
           </div>
+
+          <footer className="mt-8 flex w-full justify-center text-sm text-slate-500 dark:text-slate-400 lg:justify-start">
+            <a
+              href="https://github.com/jonochocki/flip-7-score"
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-2 font-medium transition hover:text-slate-700 dark:hover:text-slate-200"
+            >
+              Made by Jon Ochocki | <Github className="h-4 w-4" />
+            </a>
+          </footer>
         </div>
       </main>
 
+      <Drawer open={isProfileMenuOpen} onOpenChange={setIsProfileMenuOpen}>
+        <DrawerContent className="rounded-t-[32px] border-0 bg-white/95 p-6 pb-8 pt-12 shadow-[0_20px_50px_rgba(255,107,153,0.2)] sm:p-8 sm:pt-14 [&>div:first-child]:hidden before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-[10px] before:rounded-t-[32px] before:bg-[linear-gradient(90deg,#ff6b99,#ffd966,#66e0ff,#a855f7,#ff6b99)]">
+          <div className="mx-auto flex w-full max-w-md flex-col gap-6 text-center">
+            <DrawerTitle className="sr-only">Update profile</DrawerTitle>
+            <div className="relative -mt-12 flex justify-center sm:-mt-16">
+              <div
+                className={`relative flex h-20 w-20 items-center justify-center rounded-full text-3xl font-semibold text-white shadow-[0_18px_40px_rgba(255,107,153,0.25)] ring-4 ring-white/80 ${getAvatarClass(
+                  profileName || "you",
+                  profileColor,
+                )}`}
+              >
+                <span className="pointer-events-none absolute left-[18%] top-[18%] h-[38%] w-[38%] rounded-full bg-white/20 blur-[1px]" />
+                <span className={profileAvatar ? "text-3xl leading-none" : "text-2xl"}>
+                  {getAvatarLabel(profileName, profileAvatar)}
+                </span>
+              </div>
+            </div>
+            <div className="space-y-3">
+              <Button
+                onClick={() => {
+                  setProfileDrawerMode("update");
+                  setIsProfileMenuOpen(false);
+                  setIsProfileDrawerOpen(true);
+                }}
+                variant="gummyBlue"
+                className="h-12 w-full text-base"
+              >
+                Update Profile
+              </Button>
+              <Button
+                onClick={handleNotThisUser}
+                variant="gummyOrange"
+                className="h-12 w-full text-base"
+              >
+                Not {profileName}?
+              </Button>
+            </div>
+          </div>
+        </DrawerContent>
+      </Drawer>
+
       <Drawer
-        open={isCreateDrawerOpen}
+        open={isProfileDrawerOpen}
         onOpenChange={(open) => {
-          setIsCreateDrawerOpen(open);
+          setIsProfileDrawerOpen(open);
           if (!open) {
-            setHostName("");
             setCreateError("");
           }
         }}
       >
-        <DrawerContent className="rounded-t-[2rem] border-2 border-rose-200 bg-gradient-to-br from-rose-100 via-amber-50 to-white px-6 pb-8 pt-6 shadow-[0_-20px_60px_rgba(255,117,140,0.35)] [&>div:first-child]:hidden">
-          <div className="mx-auto w-full max-w-md space-y-6">
-            <DrawerTitle className="sr-only">Create a new game</DrawerTitle>
-            <div className="mx-auto h-2 w-16 rounded-full bg-rose-300/70 shadow-[inset_0_1px_2px_rgba(255,255,255,0.6)]" />
+        <DrawerContent className="rounded-t-[32px] border-0 bg-white/95 p-6 pb-8 pt-12 shadow-[0_20px_50px_rgba(255,107,153,0.2)] sm:p-8 sm:pt-14 [&>div:first-child]:hidden before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-[10px] before:rounded-t-[32px] before:bg-[linear-gradient(90deg,#ff6b99,#ffd966,#66e0ff,#a855f7,#ff6b99)]">
+          <div className="mx-auto flex w-full max-w-md flex-col gap-6">
+            <DrawerTitle className="sr-only">Profile setup</DrawerTitle>
+            <div className="relative -mt-12 flex justify-center sm:-mt-16">
+              <div
+                className={`relative flex h-24 w-24 items-center justify-center rounded-full text-4xl font-semibold text-white shadow-[0_18px_40px_rgba(255,107,153,0.25)] ring-4 ring-white/80 ${getAvatarClass(
+                  profileName || "you",
+                  profileColor,
+                )}`}
+              >
+                <span className="pointer-events-none absolute left-[18%] top-[18%] h-[38%] w-[38%] rounded-full bg-white/20 blur-[1px]" />
+                <span
+                  className={
+                    profileAvatar ? "text-4xl leading-none" : "text-2xl"
+                  }
+                >
+                  {getAvatarLabel(profileName, profileAvatar)}
+                </span>
+              </div>
+            </div>
             <div className="space-y-3">
               <Label
-                htmlFor="host-name"
-                className="text-xs font-bold uppercase tracking-widest text-rose-500/80"
+                htmlFor="profile-name"
+                className="text-xs font-bold uppercase tracking-[0.25em] text-[#ff6b99] sm:text-sm"
               >
                 Your Nickname
               </Label>
               <Input
-                id="host-name"
+                id="profile-name"
                 placeholder="e.g. CardShark"
-                value={hostName}
-                onChange={(event) => setHostName(event.target.value)}
-                className="h-14 rounded-xl border-2 border-rose-200 bg-white/90 text-lg font-bold text-slate-800 shadow-[0_10px_25px_rgba(255,138,170,0.25)] placeholder:font-medium placeholder:text-rose-200 focus:border-rose-400 focus:ring-rose-200"
+                value={profileName}
+                onChange={(event) => setProfileName(event.target.value)}
+                className="h-12 rounded-full border-0 bg-white text-base font-semibold text-slate-900 shadow-[inset_0_4px_8px_rgba(0,0,0,0.05)] ring-4 ring-[#ff6b99]/20 placeholder:text-slate-400 focus-visible:ring-[#66e0ff]"
               />
+            </div>
+
+            <div className="space-y-3">
+              <p className="text-xs font-bold uppercase tracking-[0.25em] text-[#ff6b99] sm:text-sm">
+                Avatar
+              </p>
+              <div className="flex flex-wrap gap-3">
+                {avatarOptions.map((avatar) => (
+                  <button
+                    key={avatar}
+                    type="button"
+                    onClick={() => setProfileAvatar(avatar)}
+                    className={`flex h-12 w-12 items-center justify-center rounded-full bg-white text-2xl shadow-[0_8px_18px_rgba(0,0,0,0.08)] ring-4 ring-white/70 ${
+                      profileAvatar === avatar ? "border-2 border-black" : ""
+                    }`}
+                  >
+                    {avatar}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <p className="text-xs font-bold uppercase tracking-[0.25em] text-[#ff6b99] sm:text-sm">
+                Color
+              </p>
+              <div className="flex flex-wrap gap-3">
+                {colorOptions.map((option) => (
+                  <button
+                    key={option.key}
+                    type="button"
+                    onClick={() => setProfileColor(option.key)}
+                    className={`h-10 w-10 rounded-full ring-4 ring-white/70 ${
+                      profileColor === option.key ? "border-2 border-black" : ""
+                    } ${getAvatarClass(option.key, option.key)}`}
+                    aria-label={option.label}
+                  />
+                ))}
+              </div>
             </div>
 
             {createError && (
@@ -284,12 +540,20 @@ export default function Page() {
 
             <DrawerFooter className="px-0">
               <Button
-                onClick={handleCreateLobby}
-                disabled={!hostName.trim() || isCreating}
+                onClick={
+                  profileDrawerMode === "create"
+                    ? handleCreateLobby
+                    : handleSaveProfile
+                }
+                disabled={!profileName.trim() || isCreating}
                 variant="gummyOrange"
                 className="h-12 w-full text-base"
               >
-                {isCreating ? "Creating..." : "Start Lobby"}
+                {isCreating
+                  ? "Creating..."
+                  : profileDrawerMode === "create"
+                    ? "Start Lobby"
+                    : "Save Profile"}
               </Button>
             </DrawerFooter>
           </div>
@@ -317,29 +581,29 @@ export default function Page() {
                 <InputOTPGroup className="w-full justify-between gap-2">
                 <InputOTPSlot
                   index={0}
-                  className="h-12 w-12 rounded-xl border-2 border-sky-200 bg-white text-lg font-black uppercase text-slate-900 shadow-[0_8px_18px_rgba(96,165,250,0.2)] data-[active=true]:bg-white"
+                  className="h-12 w-12 rounded-xl border-2 border-sky-200 bg-white font-atkinson text-lg font-black uppercase text-slate-900 shadow-[0_8px_18px_rgba(96,165,250,0.2)] data-[active=true]:bg-white"
                 />
                 <InputOTPSlot
                   index={1}
-                  className="h-12 w-12 rounded-xl border-2 border-sky-200 bg-white text-lg font-black uppercase text-slate-900 shadow-[0_8px_18px_rgba(96,165,250,0.2)] data-[active=true]:bg-white"
+                  className="h-12 w-12 rounded-xl border-2 border-sky-200 bg-white font-atkinson text-lg font-black uppercase text-slate-900 shadow-[0_8px_18px_rgba(96,165,250,0.2)] data-[active=true]:bg-white"
                 />
                 <InputOTPSeparator className="text-sky-500" />
                 <InputOTPSlot
                   index={2}
-                  className="h-12 w-12 rounded-xl border-2 border-sky-200 bg-white text-lg font-black uppercase text-slate-900 shadow-[0_8px_18px_rgba(96,165,250,0.2)] data-[active=true]:bg-white"
+                  className="h-12 w-12 rounded-xl border-2 border-sky-200 bg-white font-atkinson text-lg font-black uppercase text-slate-900 shadow-[0_8px_18px_rgba(96,165,250,0.2)] data-[active=true]:bg-white"
                 />
                 <InputOTPSlot
                   index={3}
-                  className="h-12 w-12 rounded-xl border-2 border-sky-200 bg-white text-lg font-black uppercase text-slate-900 shadow-[0_8px_18px_rgba(96,165,250,0.2)] data-[active=true]:bg-white"
+                  className="h-12 w-12 rounded-xl border-2 border-sky-200 bg-white font-atkinson text-lg font-black uppercase text-slate-900 shadow-[0_8px_18px_rgba(96,165,250,0.2)] data-[active=true]:bg-white"
                 />
                 <InputOTPSeparator className="text-sky-500" />
                 <InputOTPSlot
                   index={4}
-                  className="h-12 w-12 rounded-xl border-2 border-sky-200 bg-white text-lg font-black uppercase text-slate-900 shadow-[0_8px_18px_rgba(96,165,250,0.2)] data-[active=true]:bg-white"
+                  className="h-12 w-12 rounded-xl border-2 border-sky-200 bg-white font-atkinson text-lg font-black uppercase text-slate-900 shadow-[0_8px_18px_rgba(96,165,250,0.2)] data-[active=true]:bg-white"
                 />
                 <InputOTPSlot
                   index={5}
-                  className="h-12 w-12 rounded-xl border-2 border-sky-200 bg-white text-lg font-black uppercase text-slate-900 shadow-[0_8px_18px_rgba(96,165,250,0.2)] data-[active=true]:bg-white"
+                  className="h-12 w-12 rounded-xl border-2 border-sky-200 bg-white font-atkinson text-lg font-black uppercase text-slate-900 shadow-[0_8px_18px_rgba(96,165,250,0.2)] data-[active=true]:bg-white"
                 />
               </InputOTPGroup>
             </InputOTP>
@@ -365,12 +629,13 @@ export default function Page() {
   );
 }
 
-function InfoPill({ icon: Icon, label, color, bg }: InfoPillProps) {
+function InfoPill({ icon: Icon, label, color, bg, className }: InfoPillProps) {
   return (
     <div
       className={cn(
-        "relative flex items-center gap-2 rounded-full border-2 px-4 py-2",
-        bg,
+                "relative flex items-center gap-2 rounded-full border-2 px-4 py-2 whitespace-nowrap",
+                bg,
+                className,
       )}
     >
       <span
@@ -384,3 +649,15 @@ function InfoPill({ icon: Icon, label, color, bg }: InfoPillProps) {
     </div>
   );
 }
+
+const avatarOptions = ["😎", "🤠", "🦊", "🐼", "🦄", "🐙", "⭐️", "👾"];
+const colorOptions = [
+  { key: "pink", label: "Pink" },
+  { key: "orange", label: "Orange" },
+  { key: "blue", label: "Blue" },
+  { key: "teal", label: "Teal" },
+  { key: "purple", label: "Purple" },
+  { key: "magenta", label: "Magenta" },
+  { key: "yellow", label: "Yellow" },
+  { key: "cyan", label: "Cyan" },
+];
