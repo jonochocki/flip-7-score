@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { CardLoader } from "@/components/card-loader";
 import { SessionErrorState } from "@/components/session-error";
 
 type SessionGateProps = {
@@ -11,8 +12,10 @@ type SessionGateProps = {
 };
 
 const DefaultLoadingState = () => (
-  <main className="min-h-svh bg-[#f7f2e7] px-6 py-10 text-sm text-slate-600 dark:bg-slate-950 dark:text-slate-200">
-    Setting up your session...
+  <main className="relative min-h-svh bg-[#f7f2e7] px-6 py-10 text-sm text-slate-600 dark:bg-slate-950 dark:text-slate-200">
+    <div className="mx-auto flex min-h-[70svh] items-center justify-center">
+      <CardLoader />
+    </div>
   </main>
 );
 

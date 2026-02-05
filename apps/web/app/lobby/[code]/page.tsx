@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Button } from "@workspace/ui/components/button";
 import * as motion from "motion/react-client";
@@ -15,6 +15,7 @@ import { Label } from "@workspace/ui/components/label";
 import { QrCode } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { AppHeader } from "@/components/app-header";
+import { CardLoader } from "@/components/card-loader";
 import { SessionGate } from "@/components/session-gate";
 import {
   getAvatarClass,
@@ -24,8 +25,9 @@ import { type LayoutMode } from "@/components/lobby-orbit-layout";
 import { LobbyPlayerOrbit } from "@/components/lobby-player-orbit";
 import { useAnonSession } from "@/hooks/use-anon-session";
 import { useRealtimeChannel } from "@/hooks/use-realtime-channel";
+import { toast } from "@workspace/ui/components/sonner";
 
-type LobbyState = "loading" | "needs-name" | "joining" | "ready" | "error";
+type LobbyState = "loading" | "needs-name" | "joining" | "ready";
 type StoredPlayer = {
   gameId: string;
   playerId: string;
@@ -84,11 +86,7 @@ const LobbySessionLoading = () => (
     <div className="pointer-events-none absolute -top-24 left-1/2 h-80 w-80 -translate-x-1/2 rounded-full bg-gradient-to-tr from-[#ff99b8]/40 to-[#ffd966]/40 blur-3xl" />
     <div className="pointer-events-none absolute -bottom-32 right-0 h-96 w-96 rounded-full bg-gradient-to-bl from-[#66e0ff]/40 to-[#ff99b8]/40 blur-3xl" />
     <div className="relative mx-auto flex min-h-svh w-full max-w-5xl flex-col items-center justify-center gap-6 px-5 pb-24 pt-6 sm:px-10 sm:pb-28 sm:pt-10 lg:px-16">
-      <div className="rounded-full bg-gradient-to-r from-[#ff8cc3] via-[#ffd966] to-[#66e0ff] p-[3px] shadow-[0_18px_40px_-18px_rgba(255,107,153,0.5)]">
-        <div className="rounded-full bg-white/95 px-6 py-3 text-sm font-black uppercase tracking-[0.25em] text-slate-900 shadow-[inset_0_2px_0_rgba(255,255,255,0.9)]">
-          Setting up lobby...
-        </div>
-      </div>
+      <CardLoader />
     </div>
   </main>
 );
@@ -97,8 +95,6 @@ export default function LobbyPage() {
   const params = useParams<{ code: string }>();
   const router = useRouter();
   const [state, setState] = useState<LobbyState>("loading");
-  const [error, setError] = useState("");
-  const [name, setName] = useState("");
   const [players, setPlayers] = useState<Player[]>([]);
   const [gameId, setGameId] = useState("");
   const [currentPlayerId, setCurrentPlayerId] = useState("");
@@ -122,11 +118,35 @@ export default function LobbyPage() {
   const publicUrl =
     process.env.NEXT_PUBLIC_URL ||
     (typeof window !== "undefined" ? window.location.origin : "");
+  const invalidRedirectRef = useRef<number | null>(null);
+  const hasInvalidToastRef = useRef(false);
+  const lastRealtimeToastRef = useRef(0);
+  const hasRealtimeIssueRef = useRef(false);
 
   const code = useMemo(
     () => (typeof params.code === "string" ? params.code.toUpperCase() : ""),
     [params.code],
   );
+
+  const scheduleInvalidRedirect = useCallback(() => {
+    if (typeof window === "undefined") return;
+    if (hasInvalidToastRef.current) return;
+    hasInvalidToastRef.current = true;
+    toast.error("Invalid lobby code", {
+      description: "Sending you back home.",
+    });
+    invalidRedirectRef.current = window.setTimeout(() => {
+      router.replace("/");
+    }, 5000);
+  }, [router]);
+
+  useEffect(() => {
+    return () => {
+      if (invalidRedirectRef.current) {
+        window.clearTimeout(invalidRedirectRef.current);
+      }
+    };
+  }, []);
 
 
   useEffect(() => {
@@ -142,7 +162,8 @@ export default function LobbyPage() {
       );
 
       if (gameError || !gameData?.length) {
-        setState("needs-name");
+        setState("loading");
+        scheduleInvalidRedirect();
         return;
       }
 
@@ -243,7 +264,7 @@ export default function LobbyPage() {
     };
 
     init();
-  }, [code, router, session, sessionLoading, supabaseClient]);
+  }, [code, router, scheduleInvalidRedirect, session, sessionLoading, supabaseClient]);
 
   const loadPlayers = useCallback(
     async (id: string, supabase = supabaseClient) => {
@@ -308,10 +329,23 @@ export default function LobbyPage() {
     onStatusChange: (status) => {
       if (status === "SUBSCRIBED") {
         console.info("[lobby] channel status:", status);
+        if (hasRealtimeIssueRef.current) {
+          toast.success("Connection restored");
+          hasRealtimeIssueRef.current = false;
+          lastRealtimeToastRef.current = Date.now();
+        }
       }
     },
     onError: (status) => {
       console.warn("[lobby] realtime issue, resubscribing", status);
+      hasRealtimeIssueRef.current = true;
+      const now = Date.now();
+      if (now - lastRealtimeToastRef.current > 4000) {
+        toast.warning("Connection lost", {
+          description: "Reconnecting...",
+        });
+        lastRealtimeToastRef.current = now;
+      }
     },
   });
 
@@ -382,8 +416,10 @@ export default function LobbyPage() {
     });
 
     if (joinError || !data?.length) {
-      setState("error");
-      setError(joinError?.message ?? "Failed to join lobby.");
+      setState("needs-name");
+      toast.error("Couldn't join the lobby", {
+        description: "Check the code and try again.",
+      });
       return;
     }
 
@@ -422,18 +458,20 @@ export default function LobbyPage() {
       p_game_id: gameId,
     });
     if (startError) {
-      setError(startError.message);
-      setState("error");
       setIsStarting(false);
+      toast.error("Couldn't start the game", {
+        description: "Try again in a moment.",
+      });
       return;
     }
     const { error: roundError } = await supabase.rpc("create_round", {
       p_game_id: gameId,
     });
     if (roundError) {
-      setError(roundError.message);
-      setState("error");
       setIsStarting(false);
+      toast.error("Couldn't start the game", {
+        description: "Try again in a moment.",
+      });
       return;
     }
     console.info("[lobby] start_game ok, redirecting");
@@ -463,8 +501,9 @@ export default function LobbyPage() {
       })
       .eq("id", currentPlayerId);
     if (updateError) {
-      setError(updateError.message);
-      setState("error");
+      toast.error("Couldn't save your profile", {
+        description: "Try again in a moment.",
+      });
       return;
     }
 
@@ -558,7 +597,7 @@ export default function LobbyPage() {
             />
           </div>
           <div className="pt-2 sm:pt-4">
-          {state !== "needs-name" && (
+          {state === "ready" && (
             <header className="relative mx-auto w-full max-w-md pb-10 text-center">
               <div className="relative rounded-[36px] bg-gradient-to-r from-[#ff8cc3] via-[#ffd966] to-[#66e0ff] p-[5px] shadow-[0_30px_65px_-18px_rgba(255,107,153,0.6)]">
                 <div className="relative rounded-[31px] bg-white/95 px-7 py-7 shadow-[inset_0_3px_0_rgba(255,255,255,0.9)] sm:px-8 sm:py-8">
@@ -584,18 +623,8 @@ export default function LobbyPage() {
 
           <div className="flex min-h-0 flex-1 flex-col gap-6">
             {state === "loading" && (
-              <div className="flex flex-1 items-center justify-center">
-                <div className="rounded-full bg-gradient-to-r from-[#ff8cc3] via-[#ffd966] to-[#66e0ff] p-[3px] shadow-[0_18px_40px_-18px_rgba(255,107,153,0.5)]">
-                  <div className="rounded-full bg-white/95 px-6 py-3 text-sm font-black uppercase tracking-[0.25em] text-slate-900 shadow-[inset_0_2px_0_rgba(255,255,255,0.9)]">
-                    Loading Lobby...
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {state === "error" && (
-              <div className="rounded-2xl bg-[#ff6b99]/10 px-4 py-3 text-sm font-medium text-[#ff6b99] ring-4 ring-[#ff6b99]/20">
-                {error || "Something went wrong."}
+              <div className="fixed inset-0 z-30 flex items-center justify-center">
+                <CardLoader />
               </div>
             )}
 
