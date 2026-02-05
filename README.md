@@ -1,31 +1,84 @@
-# shadcn/ui monorepo template
+<br/>
+<p align="center">
+  <a href="https://github.com/jonochocki/flip-7-score">
+    <img src="apps/web/public/assets/img/card-fan.png" alt="7 Score" width="500">
+  </a>
 
-This template is for creating a monorepo with shadcn/ui.
+  <h3 align="center">7 Score</h3>
 
-## Usage
+  <p align="center">
+    A live multiplayer scorekeeping companion for the card game Flip 7.
+    <br/>
+    <br/>
+  </p>
+</p>
+
+![Contributors](https://img.shields.io/github/contributors/jonochocki/flip-7-score?color=dark-green) ![Stargazers](https://img.shields.io/github/stars/jonochocki/flip-7-score?style=social) ![Issues](https://img.shields.io/github/issues/jonochocki/flip-7-score)
+
+## Table Of Contents
+
+* [About The Project](#about-the-project)
+* [Status](#status)
+* [Getting Started](#getting-started)
+  * [Prerequisites](#prerequisites)
+  * [Quick Start](#quick-start)
+* [Scripts](#scripts)
+* [Database](#database)
+* [Project Structure](#project-structure)
+* [License](#license)
+
+## About The Project
+
+7 Score is a companion scorekeeper for the card game Flip 7. It’s built for live multiplayer sessions, keeping players and the host in sync in real time during lobbies, rounds, and final results.
+
+## Status
+
+⚠️ Active development ⚠️  
+Contributions are welcome but proceed at your own risk.
+
+## Getting Started
+
+### Prerequisites
+
+- Node.js `>=20`
+- pnpm `10.x`
+
+### Quick Start
 
 ```bash
-pnpm dlx shadcn@latest init
+pnpm install
+pnpm dev
 ```
 
-## Adding components
+By default, the web app runs from `apps/web`. Environment variables live in `apps/web/.env.local`.
 
-To add components to your app, run the following command at the root of your `web` app:
+## Scripts
 
 ```bash
-pnpm dlx shadcn@latest add button -c apps/web
+# Start development (all packages)
+pnpm dev
+
+# Production build
+pnpm build
+
+# Lint
+pnpm lint
 ```
 
-This will place the ui components in the `packages/ui/src/components` directory.
+### Tests
 
-## Tailwind
+Automated tests are not configured yet. When they’re added, this section will include the test command.
 
-Your `tailwind.config.ts` and `globals.css` are already set up to use the components from the `ui` package.
+## Database
 
-## Using components
+This project uses Supabase for the database, realtime updates, and auth.
 
-To use the components in your app, import them from the `ui` package.
+## Project Structure
 
-```tsx
-import { Button } from "@workspace/ui/components/button"
-```
+- `apps/web` – Next.js app
+- `packages/ui` – Shared UI components
+- `packages/database` – Database types and tooling
+
+## License
+
+All rights reserved.
