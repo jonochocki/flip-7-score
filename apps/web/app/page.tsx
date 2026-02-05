@@ -20,6 +20,7 @@ import {
 import { Input } from "@workspace/ui/components/input";
 import { Label } from "@workspace/ui/components/label";
 import { AppHeader } from "@/components/app-header";
+import { CardLoader } from "@/components/card-loader";
 import { SessionGate } from "@/components/session-gate";
 import { useAnonSession } from "@/hooks/use-anon-session";
 import { cn } from "@workspace/ui/lib/utils";
@@ -51,11 +52,7 @@ type InfoPillProps = {
 const HomeSessionLoading = () => (
   <main className="relative min-h-svh overflow-hidden text-slate-900 dark:text-slate-100">
     <div className="relative mx-auto flex min-h-svh w-full max-w-5xl flex-col items-center justify-center gap-6 px-5 pb-24 pt-6 sm:px-10 sm:pb-28 sm:pt-10 lg:px-16">
-      <div className="rounded-full bg-gradient-to-r from-[#ff8cc3] via-[#ffd966] to-[#66e0ff] p-[3px] shadow-[0_18px_40px_-18px_rgba(255,107,153,0.5)] dark:from-[#6a2b7a] dark:via-[#f59e0b] dark:to-[#0b4a66] dark:shadow-[0_18px_40px_-18px_rgba(236,72,153,0.45)]">
-        <div className="rounded-full bg-white/95 px-6 py-3 text-sm font-black uppercase tracking-[0.25em] text-slate-900 shadow-[inset_0_2px_0_rgba(255,255,255,0.9)] dark:bg-slate-950/90 dark:text-slate-100">
-          Setting up game...
-        </div>
-      </div>
+      <CardLoader />
     </div>
   </main>
 );

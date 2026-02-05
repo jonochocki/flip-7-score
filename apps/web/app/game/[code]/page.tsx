@@ -16,6 +16,7 @@ import {
 import { Users } from "lucide-react";
 import confetti from "canvas-confetti";
 import { AppHeader } from "@/components/app-header";
+import { CardLoader } from "@/components/card-loader";
 import { GameCardGrid } from "@/components/game-card-grid";
 import { GameScoreDisplay } from "@/components/game-score-display";
 import { SessionGate } from "@/components/session-gate";
@@ -26,8 +27,9 @@ import {
 } from "@/components/lobby-player-bubbles";
 import { useAnonSession } from "@/hooks/use-anon-session";
 import { useRealtimeChannel } from "@/hooks/use-realtime-channel";
+import { toast } from "@workspace/ui/components/sonner";
 
-type GameState = "loading" | "ready" | "error";
+type GameState = "loading" | "ready";
 
 type Player = {
   id: string;
@@ -108,11 +110,7 @@ const GameSessionLoading = () => (
     <div className="pointer-events-none absolute -top-24 left-1/2 h-80 w-80 -translate-x-1/2 rounded-full bg-gradient-to-tr from-[#ff99b8]/40 to-[#ffd966]/40 blur-3xl dark:from-[#6a2b7a]/70 dark:to-[#6a4a1d]/55" />
     <div className="pointer-events-none absolute -bottom-32 right-0 h-96 w-96 rounded-full bg-gradient-to-bl from-[#66e0ff]/40 to-[#ff99b8]/40 blur-3xl dark:from-[#0b4a66]/65 dark:to-[#6a2b7a]/55" />
     <div className="relative mx-auto flex min-h-[70svh] items-center justify-center">
-      <div className="rounded-full bg-gradient-to-r from-[#ff8cc3] via-[#ffd966] to-[#66e0ff] p-[3px] shadow-[0_18px_40px_-18px_rgba(255,107,153,0.5)] dark:shadow-[0_18px_40px_-18px_rgba(236,72,153,0.45)]">
-        <div className="rounded-full bg-white/95 px-6 py-3 text-sm font-black uppercase tracking-[0.25em] text-slate-900 shadow-[inset_0_2px_0_rgba(255,255,255,0.95)] dark:bg-slate-950/95 dark:text-slate-100">
-          Setting up game...
-        </div>
-      </div>
+      <CardLoader />
     </div>
   </main>
 );
@@ -121,7 +119,6 @@ export default function GamePage() {
   const params = useParams<{ code: string }>();
   const router = useRouter();
   const [state, setState] = useState<GameState>("loading");
-  const [error, setError] = useState("");
   const [gameStatus, setGameStatus] = useState<string>("");
   const [gameId, setGameId] = useState("");
   const [currentPlayerId, setCurrentPlayerId] = useState("");
@@ -158,7 +155,32 @@ export default function GamePage() {
   const bustedSubmitRoundRef = useRef<string>("");
   const roundCompleteBroadcastRef = useRef<string>("");
   const roundRetryRef = useRef<number | null>(null);
+  const redirectTimeoutRef = useRef<number | null>(null);
+  const hasRedirectToastRef = useRef(false);
+  const lastRealtimeToastRef = useRef(0);
+  const hasRealtimeIssueRef = useRef(false);
   const code = typeof params.code === "string" ? params.code.toUpperCase() : "";
+
+  const scheduleReturnHome = useCallback(
+    (title: string, description?: string) => {
+      if (typeof window === "undefined") return;
+      if (hasRedirectToastRef.current) return;
+      hasRedirectToastRef.current = true;
+      toast.error(title, { description });
+      redirectTimeoutRef.current = window.setTimeout(() => {
+        router.replace("/");
+      }, 5000);
+    },
+    [router],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (redirectTimeoutRef.current) {
+        window.clearTimeout(redirectTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     playersRef.current = players;
@@ -182,8 +204,8 @@ export default function GamePage() {
         p_code: code,
       });
       if (!gameData?.length) {
-        setState("error");
-        setError("Game not found.");
+        setState("loading");
+        scheduleReturnHome("Game not found", "Sending you back home.");
         return;
       }
 
@@ -265,7 +287,7 @@ export default function GamePage() {
     };
 
     init();
-  }, [code, router, sessionLoading, supabaseClient]);
+  }, [code, router, scheduleReturnHome, sessionLoading, supabaseClient]);
 
   // Aggressive realtime: rely on Supabase realtime events instead of polling.
 
@@ -578,10 +600,23 @@ export default function GamePage() {
     onStatusChange: (status) => {
       if (status === "SUBSCRIBED") {
         console.info("[game] channel status:", status);
+        if (hasRealtimeIssueRef.current) {
+          toast.success("Connection restored");
+          hasRealtimeIssueRef.current = false;
+          lastRealtimeToastRef.current = Date.now();
+        }
       }
     },
     onError: (status) => {
       console.warn("[game] realtime issue, resubscribing", status);
+      hasRealtimeIssueRef.current = true;
+      const now = Date.now();
+      if (now - lastRealtimeToastRef.current > 4000) {
+        toast.warning("Connection lost", {
+          description: "Reconnecting...",
+        });
+        lastRealtimeToastRef.current = now;
+      }
     },
   });
 
@@ -651,8 +686,9 @@ export default function GamePage() {
     });
     if (submitError) {
       console.error("[game] submit_score failed", submitError);
-      setError(submitError.message);
-      setState("error");
+      toast.error("Couldn't submit your score", {
+        description: "Try again in a moment.",
+      });
       return;
     }
     setHasSubmitted(true);
@@ -669,8 +705,9 @@ export default function GamePage() {
       p_game_id: gameId,
     });
     if (roundError) {
-      setError(roundError.message);
-      setState("error");
+      toast.error("Couldn't start the next round", {
+        description: "Try again in a moment.",
+      });
       return;
     }
     const { error: resetError } = await supabase
@@ -679,8 +716,9 @@ export default function GamePage() {
       .eq("game_id", gameId)
       .neq("status", "left");
     if (resetError) {
-      setError(resetError.message);
-      setState("error");
+      toast.error("Couldn't reset players", {
+        description: "Try again in a moment.",
+      });
       return;
     }
     await loadPlayers(gameId, currentPlayerId, supabase);
@@ -705,8 +743,9 @@ export default function GamePage() {
       .update({ status: "busted" })
       .eq("id", playerId);
     if (updateError) {
-      setError(updateError.message);
-      setState("error");
+      toast.error("Couldn't update that player", {
+        description: "Try again in a moment.",
+      });
       setPlayers((prev) =>
         prev.map((player) =>
           player.id === playerId ? { ...player, status: "active" } : player,
@@ -736,8 +775,9 @@ export default function GamePage() {
       .update({ status: "frozen" })
       .eq("id", playerId);
     if (updateError) {
-      setError(updateError.message);
-      setState("error");
+      toast.error("Couldn't update that player", {
+        description: "Try again in a moment.",
+      });
       setPlayers((prev) =>
         prev.map((player) =>
           player.id === playerId ? { ...player, status: "active" } : player,
@@ -767,8 +807,9 @@ export default function GamePage() {
       .update({ status: "active" })
       .eq("id", playerId);
     if (updateError) {
-      setError(updateError.message);
-      setState("error");
+      toast.error("Couldn't update that player", {
+        description: "Try again in a moment.",
+      });
       return;
     }
     broadcastMessage("player_status", { playerId, status: "active" });
@@ -786,9 +827,10 @@ export default function GamePage() {
     );
 
     if (rematchError || !data?.length) {
-      setError(rematchError?.message ?? "Failed to create rematch.");
-      setState("error");
       setIsRematchStarting(false);
+      toast.error("Couldn't start a rematch", {
+        description: "Try again in a moment.",
+      });
       return;
     }
 
@@ -948,66 +990,8 @@ export default function GamePage() {
           </header>
         </div>
         <div className="relative mx-auto flex min-h-[70svh] items-center justify-center">
-          <div className="loading-pill-border relative rounded-full p-[3px] shadow-[0_18px_40px_-18px_rgba(255,107,153,0.5)] dark:shadow-[0_18px_40px_-18px_rgba(236,72,153,0.45)]">
-            <div className="relative z-10 rounded-full bg-white px-6 py-3 text-sm font-black uppercase tracking-[0.25em] text-slate-900 shadow-[inset_0_2px_0_rgba(255,255,255,0.95)] dark:bg-slate-950/95 dark:text-slate-100">
-              Loading game...
-            </div>
-          </div>
+          <CardLoader />
         </div>
-        <style jsx>{`
-          .loading-pill-border {
-            position: relative;
-            overflow: hidden;
-          }
-          .loading-pill-border::before {
-            content: "";
-            position: absolute;
-            inset: 0;
-            border-radius: 9999px;
-            --spin-angle: 0deg;
-            background: conic-gradient(
-              from var(--spin-angle),
-              #ff8cc3,
-              #ffb3c7,
-              #ffd966,
-              #fff1a6,
-              #66e0ff,
-              #7dd3fc,
-              #22d3ee,
-              #a855f7,
-              #f472b6,
-              #ff8cc3
-            );
-            animation: spin-angle 8s linear infinite;
-            will-change: background;
-          }
-          :global(.dark) .loading-pill-border::before {
-            background: conic-gradient(
-              from var(--spin-angle),
-              #6a2b7a,
-              #8b5cf6,
-              #7c3aed,
-              #f59e0b,
-              #fbbf24,
-              #0b4a66,
-              #22d3ee,
-              #38bdf8,
-              #a855f7,
-              #ec4899,
-              #6a2b7a
-            );
-          }
-          @property --spin-angle {
-            syntax: "<angle>";
-            inherits: false;
-            initial-value: 0deg;
-          }
-          @keyframes spin-angle {
-            to {
-              --spin-angle: 1turn;
-            }
-          }
-        `}</style>
       </main>
     );
   }
@@ -1032,75 +1016,7 @@ export default function GamePage() {
           </header>
         </div>
         <div className="relative mx-auto flex min-h-[70svh] items-center justify-center">
-          <div className="loading-pill-border relative rounded-full p-[3px] shadow-[0_18px_40px_-18px_rgba(255,107,153,0.5)] dark:shadow-[0_18px_40px_-18px_rgba(236,72,153,0.45)]">
-            <div className="relative z-10 rounded-full bg-white px-6 py-3 text-sm font-black uppercase tracking-[0.25em] text-slate-900 shadow-[inset_0_2px_0_rgba(255,255,255,0.95)] dark:bg-slate-950/95 dark:text-slate-100">
-              Loading Lobby...
-            </div>
-          </div>
-        </div>
-        <style jsx>{`
-          .loading-pill-border {
-            position: relative;
-            overflow: hidden;
-          }
-          .loading-pill-border::before {
-            content: "";
-            position: absolute;
-            inset: 0;
-            border-radius: 9999px;
-            --spin-angle: 0deg;
-            background: conic-gradient(
-              from var(--spin-angle),
-              #ff8cc3,
-              #ffb3c7,
-              #ffd966,
-              #fff1a6,
-              #66e0ff,
-              #7dd3fc,
-              #22d3ee,
-              #a855f7,
-              #f472b6,
-              #ff8cc3
-            );
-            animation: spin-angle 8s linear infinite;
-            will-change: background;
-          }
-          :global(.dark) .loading-pill-border::before {
-            background: conic-gradient(
-              from var(--spin-angle),
-              #6a2b7a,
-              #8b5cf6,
-              #7c3aed,
-              #f59e0b,
-              #fbbf24,
-              #0b4a66,
-              #22d3ee,
-              #38bdf8,
-              #a855f7,
-              #ec4899,
-              #6a2b7a
-            );
-          }
-          @property --spin-angle {
-            syntax: "<angle>";
-            inherits: false;
-            initial-value: 0deg;
-          }
-          @keyframes spin-angle {
-            to {
-              --spin-angle: 1turn;
-            }
-          }
-        `}</style>
-      </main>
-    );
-  }
-
-  if (state === "error") {
-    return (
-      <main className="relative min-h-svh overflow-hidden px-6 py-10 text-sm text-[#a51f3b] dark:text-[#ff8aa3]">
-        <div className="relative mx-auto flex min-h-[70svh] items-center justify-center">
-          {error || "Something went wrong."}
+          <CardLoader />
         </div>
       </main>
     );
@@ -1161,11 +1077,7 @@ export default function GamePage() {
 
         {state === "ready" && !roundStateReady ? (
           <div className="flex min-h-0 flex-1 items-center justify-center">
-            <div className="rounded-full bg-gradient-to-r from-[#ff8cc3] via-[#ffd966] to-[#66e0ff] p-[3px] shadow-[0_18px_40px_-18px_rgba(255,107,153,0.5)] dark:from-[#6a2b7a] dark:via-[#f59e0b] dark:to-[#0b4a66] dark:shadow-[0_18px_40px_-18px_rgba(236,72,153,0.45)]">
-              <div className="rounded-full bg-white/95 px-6 py-3 text-sm font-black uppercase tracking-[0.2em] text-slate-900 shadow-[inset_0_2px_0_rgba(255,255,255,0.9)] dark:bg-slate-950/80 dark:text-slate-100">
-                Syncing Round...
-              </div>
-            </div>
+            <CardLoader />
           </div>
         ) : allSubmitted ? (
           isGameOver ? (
