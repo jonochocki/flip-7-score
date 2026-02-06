@@ -50,7 +50,7 @@ export default function RootLayout({
               title:
                 "relative z-10 text-[11px] font-black uppercase tracking-[0.35em] text-current",
               description:
-                "relative z-10 mt-1 text-sm font-semibold text-current",
+                "relative z-10 mt-1 text-sm font-semibold",
               icon:
                 "relative z-10 mt-0.5 text-current",
               actionButton:

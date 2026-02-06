@@ -22,12 +22,27 @@ type BroadcastHandler = {
   onMessage: (payload: { payload?: Record<string, unknown> }) => void | Promise<void>;
 };
 
+type PresenceHandler = {
+  key: string;
+  payload?: Record<string, unknown>;
+  onSync?: (state: Record<string, unknown[]>) => void;
+  onJoin?: (payload: {
+    key: string;
+    newPresences: Record<string, unknown>[];
+  }) => void;
+  onLeave?: (payload: {
+    key: string;
+    leftPresences: Record<string, unknown>[];
+  }) => void;
+};
+
 type UseRealtimeChannelArgs = {
   supabase: SupabaseClient;
   key: string;
   enabled: boolean;
   postgres?: PostgresHandler[];
   broadcast?: BroadcastHandler[];
+  presence?: PresenceHandler;
   onStatusChange?: (status: string) => void;
   onSubscribed?: () => void;
   onError?: (status: string) => void;
@@ -40,6 +55,7 @@ export const useRealtimeChannel = ({
   enabled,
   postgres = [],
   broadcast = [],
+  presence,
   onStatusChange,
   onSubscribed,
   onError,
@@ -56,6 +72,7 @@ export const useRealtimeChannel = ({
     onSubscribed,
   );
   const onErrorRef = useRef<UseRealtimeChannelArgs["onError"]>(onError);
+  const presenceRef = useRef<PresenceHandler | undefined>(presence);
 
   useEffect(() => {
     postgresRef.current = postgres;
@@ -69,7 +86,8 @@ export const useRealtimeChannel = ({
     onStatusChangeRef.current = onStatusChange;
     onSubscribedRef.current = onSubscribed;
     onErrorRef.current = onError;
-  }, [onError, onStatusChange, onSubscribed]);
+    presenceRef.current = presence;
+  }, [onError, onStatusChange, onSubscribed, presence]);
 
   const postgresSignature = useMemo(
     () => JSON.stringify(postgres.map((handler) => handler.filter)),
@@ -79,6 +97,16 @@ export const useRealtimeChannel = ({
     () => JSON.stringify(broadcast.map((handler) => handler.event)),
     [broadcast],
   );
+  const presenceSignature = useMemo(() => {
+    if (!presence) return "";
+    return JSON.stringify({
+      key: presence.key,
+      payload: presence.payload ?? null,
+      hasSync: !!presence.onSync,
+      hasJoin: !!presence.onJoin,
+      hasLeave: !!presence.onLeave,
+    });
+  }, [presence]);
 
   useEffect(() => {
     if (!enabled || !key) return;
@@ -110,7 +138,13 @@ export const useRealtimeChannel = ({
     };
 
     const subscribe = () => {
-      channel = supabase.channel(key);
+      const presenceConfig = presenceRef.current?.key
+        ? { presence: { key: presenceRef.current.key } }
+        : undefined;
+      channel = supabase.channel(
+        key,
+        presenceConfig ? { config: presenceConfig } : undefined,
+      );
       subscribedRef.current = false;
       postgresRef.current.forEach((handler, index) => {
         channel = (channel as RealtimeChannel & {
@@ -140,12 +174,53 @@ export const useRealtimeChannel = ({
           (payload) => broadcastRef.current[index]?.onMessage(payload),
         );
       });
+      if (presenceRef.current) {
+        channel = (channel as RealtimeChannel & {
+          on: (
+            type: "presence",
+            filter: { event: "sync" | "join" | "leave" },
+            callback: (payload: {
+              key: string;
+              newPresences: Record<string, unknown>[];
+              leftPresences: Record<string, unknown>[];
+            }) => void,
+          ) => RealtimeChannel;
+          presenceState: () => Record<string, unknown[]>;
+          track: (payload: Record<string, unknown>) => Promise<unknown>;
+        })
+          .on("presence", { event: "sync" }, () => {
+            const state =
+              (channel as RealtimeChannel & {
+                presenceState: () => Record<string, unknown[]>;
+              }).presenceState?.() ?? {};
+            presenceRef.current?.onSync?.(state);
+          })
+          .on("presence", { event: "join" }, (payload) => {
+            presenceRef.current?.onJoin?.({
+              key: payload.key,
+              newPresences: payload.newPresences ?? [],
+            });
+          })
+          .on("presence", { event: "leave" }, (payload) => {
+            presenceRef.current?.onLeave?.({
+              key: payload.key,
+              leftPresences: payload.leftPresences ?? [],
+            });
+          });
+      }
       channel.subscribe((status) => {
         if (!isActive) return;
         onStatusChangeRef.current?.(status);
         if (status === "SUBSCRIBED") {
           subscribedRef.current = true;
           onSubscribedRef.current?.();
+          if (presenceRef.current?.payload) {
+            (channel as RealtimeChannel & {
+              track: (payload: Record<string, unknown>) => Promise<unknown>;
+            })
+              .track(presenceRef.current.payload)
+              .catch(() => undefined);
+          }
           return;
         }
         if (status === "CLOSED") {
@@ -179,6 +254,7 @@ export const useRealtimeChannel = ({
     key,
     postgresSignature,
     broadcastSignature,
+    presenceSignature,
     reconnectDelayMs,
     supabase,
   ]);
