@@ -2,12 +2,23 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as motion from "motion/react-client";
-import { Pencil } from "lucide-react";
+import { Pencil, UserX } from "lucide-react";
 import {
   computeLobbyLayout,
   type LayoutMode,
 } from "@/components/lobby-orbit-layout";
 import { getAvatarClass, getAvatarLabel } from "@/components/lobby-player-bubbles";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@workspace/ui/components/alert-dialog";
 
 type Player = {
   id: string;
@@ -22,6 +33,7 @@ type LobbyPlayerOrbitProps = {
   hostPlayerId: string;
   isHost: boolean;
   onOpenProfile?: () => void;
+  onRemovePlayer?: (playerId: string) => void | Promise<void>;
   layoutMode?: LayoutMode;
 };
 
@@ -38,6 +50,7 @@ export function LobbyPlayerOrbit({
   hostPlayerId,
   isHost,
   onOpenProfile,
+  onRemovePlayer,
   layoutMode = "orbit",
 }: LobbyPlayerOrbitProps) {
   const currentPlayer = players.find((player) => player.id === currentPlayerId);
@@ -165,6 +178,7 @@ export function LobbyPlayerOrbit({
           const player = orbitPlayers.find((item) => item.id === bubble.id);
           if (!player) return null;
           const isHostPlayer = player.id === hostPlayerId;
+          const canRemove = isHost && player.id !== currentPlayerId;
           return (
             <motion.div
               key={bubble.id}
@@ -226,6 +240,38 @@ export function LobbyPlayerOrbit({
                   <span className="relative z-30 mt-1 rounded-full bg-white/80 px-2 py-0.5 text-[8px] font-bold uppercase tracking-[0.2em] text-[#ff6b99] ring-2 ring-[#ff6b99]/20">
                     Host
                   </span>
+                )}
+                {canRemove && (
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <button
+                        type="button"
+                        className="relative z-30 mt-2 inline-flex h-7 items-center gap-1 rounded-full bg-white/90 px-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-rose-500 shadow-[0_6px_16px_rgba(0,0,0,0.08)] ring-2 ring-white/70 transition hover:scale-[1.02] active:scale-[0.98]"
+                        aria-label={`Remove ${player.name}`}
+                      >
+                        <UserX className="h-3 w-3 stroke-[2.5]" />
+                        Remove
+                      </button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent size="sm">
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Remove player?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          {player.name} will be removed from this lobby. They can
+                          rejoin using the lobby code.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                          variant="gummyRed"
+                          onClick={() => onRemovePlayer?.(player.id)}
+                        >
+                          Remove
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
                 )}
               </motion.div>
             </motion.div>

@@ -49,6 +49,7 @@ where n.nspname = 'public'
     'join_game',
     'start_game',
     'create_round',
+    'handle_lobby_departure',
     'submit_score',
     'create_rematch_game',
     'get_game_by_code',
@@ -70,9 +71,8 @@ set search_path to 'public'
 as $function$
   select g.id, g.code, g.status
   from public.games g
-  join public.players p on p.game_id = g.id
   where g.code = upper(p_code)
-    and p.user_id = auth.uid()
+    and auth.uid() is not null
   limit 1;
 $function$;
 
@@ -165,7 +165,10 @@ begin
     p.avatar,
     p.color,
     p.seat_order,
-    'active',
+    case
+      when p.status = 'left' then 'left'
+      else 'active'
+    end,
     p.user_id
   from players p
   where p.game_id = p_game_id
@@ -177,6 +180,7 @@ begin
     from players p
     where p.game_id = v_new_game_id
       and p.seat_order = v_host_seat
+      and p.status <> 'left'
     limit 1
   )
   where g.id = v_new_game_id;
@@ -243,6 +247,54 @@ begin
   returning id into v_player_id;
 
   return query select v_game_id, v_player_id;
+end;
+$function$;
+
+create or replace function public.handle_lobby_departure(
+  p_game_id uuid,
+  p_player_id uuid
+)
+returns void
+language plpgsql
+security definer
+set search_path to 'public'
+as $function$
+declare
+  v_host_player_id uuid;
+  v_status game_status;
+begin
+  if auth.uid() is null then
+    raise exception 'auth required';
+  end if;
+
+  select g.host_player_id, g.status into v_host_player_id, v_status
+  from public.games g
+  where g.id = p_game_id;
+
+  if v_host_player_id is null then
+    raise exception 'game not found';
+  end if;
+
+  if v_status <> 'lobby' then
+    raise exception 'game not in lobby';
+  end if;
+
+  if p_player_id = v_host_player_id then
+    if not public.is_game_member(p_game_id) then
+      raise exception 'not a member';
+    end if;
+    delete from public.players where game_id = p_game_id;
+    delete from public.games where id = p_game_id;
+    return;
+  end if;
+
+  if not public.is_game_host(p_game_id) then
+    raise exception 'only host can remove players';
+  end if;
+
+  delete from public.players
+  where id = p_player_id
+    and game_id = p_game_id;
 end;
 $function$;
 

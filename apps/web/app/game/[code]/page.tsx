@@ -6,6 +6,17 @@ import Image from "next/image";
 import { AnimatePresence, motion } from "motion/react";
 import { Button } from "@workspace/ui/components/button";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@workspace/ui/components/alert-dialog";
+import {
   Drawer,
   DrawerContent,
   DrawerDescription,
@@ -13,7 +24,7 @@ import {
   DrawerTitle,
   DrawerTrigger,
 } from "@workspace/ui/components/drawer";
-import { Users } from "lucide-react";
+import { Users, X } from "lucide-react";
 import confetti from "canvas-confetti";
 import { AppHeader } from "@/components/app-header";
 import { CardLoader } from "@/components/card-loader";
@@ -131,6 +142,9 @@ export default function GamePage() {
   const [submittedScore, setSubmittedScore] = useState<number | null>(null);
   const [submittedFlip7Bonus, setSubmittedFlip7Bonus] = useState(false);
   const [roundIndex, setRoundIndex] = useState(1);
+  const [removedRoundByPlayer, setRemovedRoundByPlayer] = useState<
+    Record<string, number>
+  >({});
   const [allSubmitted, setAllSubmitted] = useState(false);
   const [allSubmittedRoundId, setAllSubmittedRoundId] = useState("");
   const [roundScores, setRoundScores] = useState<
@@ -166,7 +180,7 @@ export default function GamePage() {
       if (typeof window === "undefined") return;
       if (hasRedirectToastRef.current) return;
       hasRedirectToastRef.current = true;
-      toast.error(title, { description });
+      toast.error(title, { description, descriptionClassName: "text-black" });
       redirectTimeoutRef.current = window.setTimeout(() => {
         router.replace("/");
       }, 5000);
@@ -186,6 +200,27 @@ export default function GamePage() {
     playersRef.current = players;
     playersCountRef.current = players.length;
   }, [players]);
+
+  useEffect(() => {
+    if (!players.length) return;
+    setRemovedRoundByPlayer((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      players.forEach((player) => {
+        if (player.status !== "left" && next[player.id]) {
+          delete next[player.id];
+          changed = true;
+        }
+      });
+      Object.entries(next).forEach(([playerId, removedRound]) => {
+        if (removedRound < roundIndex) {
+          delete next[playerId];
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [players, roundIndex]);
 
   useEffect(() => {
     currentPlayerIdRef.current = currentPlayerId;
@@ -543,6 +578,24 @@ export default function GamePage() {
         },
       },
       {
+        event: "player_removed",
+        onMessage: ({ payload }: { payload?: unknown }) => {
+          const nextPayload = payload as
+            | { playerId?: string; player_id?: string }
+            | undefined;
+          const removedId = nextPayload?.playerId ?? nextPayload?.player_id;
+          if (!removedId) return;
+          if (removedId !== currentPlayerIdRef.current) return;
+          try {
+            sessionStorage.removeItem(`flip7_player_${code}`);
+            localStorage.removeItem(`flip7_player_${code}`);
+          } catch {
+            // Ignore storage failures.
+          }
+          scheduleReturnHome("Removed from game", "Sending you back home.");
+        },
+      },
+      {
         event: "round_complete",
         onMessage: ({ payload }) => {
           const roundId = (payload as { roundId?: string } | undefined)?.roundId;
@@ -588,7 +641,15 @@ export default function GamePage() {
         },
       },
     ],
-    [gameId, loadCurrentRound, refreshRoundState, router, supabaseClient],
+    [
+      gameId,
+      loadCurrentRound,
+      refreshRoundState,
+      router,
+      scheduleReturnHome,
+      supabaseClient,
+      code,
+    ],
   );
 
   const { broadcastMessage } = useRealtimeChannel({
@@ -601,9 +662,17 @@ export default function GamePage() {
       if (status === "SUBSCRIBED") {
         console.info("[game] channel status:", status);
         if (hasRealtimeIssueRef.current) {
-          toast.success("Connection restored");
+          const now = Date.now();
+          if (
+            typeof document === "undefined" ||
+            document.visibilityState === "visible"
+          ) {
+            if (now - lastRealtimeToastRef.current > 4000) {
+              toast.success("Connection restored", { id: "game-realtime-restored" });
+              lastRealtimeToastRef.current = now;
+            }
+          }
           hasRealtimeIssueRef.current = false;
-          lastRealtimeToastRef.current = Date.now();
         }
       }
     },
@@ -815,6 +884,69 @@ export default function GamePage() {
     broadcastMessage("player_status", { playerId, status: "active" });
   };
 
+  const handleRemovePlayer = useCallback(
+    async (playerId: string) => {
+      if (!gameId || !currentPlayerId || currentPlayerId !== hostPlayerId) {
+        return;
+      }
+      if (!playerId || playerId === hostPlayerId) return;
+      const previousStatus =
+        playersRef.current.find((player) => player.id === playerId)?.status ??
+        "active";
+      setRemovedRoundByPlayer((prev) => ({
+        ...prev,
+        [playerId]: roundIndex,
+      }));
+      setPlayers((prev) =>
+        prev.map((player) =>
+          player.id === playerId ? { ...player, status: "left" } : player,
+        ),
+      );
+      setCurrentPlayer((prev) =>
+        prev?.id === playerId ? { ...prev, status: "left" } : prev,
+      );
+      const { error: updateError } = await supabaseClient
+        .from("players")
+        .update({ status: "left" })
+        .eq("id", playerId);
+      if (updateError) {
+        toast.error("Couldn't remove that player", {
+          description: "Try again in a moment.",
+          descriptionClassName: "text-black",
+        });
+        setRemovedRoundByPlayer((prev) => {
+          if (!prev[playerId]) return prev;
+          const next = { ...prev };
+          delete next[playerId];
+          return next;
+        });
+        setPlayers((prev) =>
+          prev.map((player) =>
+            player.id === playerId
+              ? { ...player, status: previousStatus }
+              : player,
+          ),
+        );
+        setCurrentPlayer((prev) =>
+          prev?.id === playerId ? { ...prev, status: previousStatus } : prev,
+        );
+        return;
+      }
+      broadcastMessage("player_status", { playerId, status: "left" });
+      broadcastMessage("player_removed", { playerId });
+      await loadPlayers(gameId, currentPlayerId, supabaseClient);
+    },
+    [
+      broadcastMessage,
+      currentPlayerId,
+      gameId,
+      hostPlayerId,
+      loadPlayers,
+      roundIndex,
+      supabaseClient,
+    ],
+  );
+
   const handlePlayAgain = async () => {
     if (!gameId || !isHost || isRematchStarting) return;
     setIsRematchStarting(true);
@@ -878,7 +1010,16 @@ export default function GamePage() {
     ? submittedFlip7Bonus
     : scoreSummary.isFlip7Bonus;
   const scoreSize = "large";
-  const sortedTotals = [...totals].sort(
+  const activePlayerIds = new Set(
+    players
+      .filter((player) => player.status !== "left")
+      .map((player) => player.id),
+  );
+  const visibleTotals =
+    activePlayerIds.size > 0
+      ? totals.filter((total) => activePlayerIds.has(total.player_id))
+      : totals;
+  const sortedTotals = [...visibleTotals].sort(
     (a, b) => b.total_score - a.total_score,
   );
   const winner = sortedTotals[0];
@@ -886,6 +1027,12 @@ export default function GamePage() {
   const currentStatus = players.find(
     (player) => player.id === currentPlayerId,
   )?.status;
+  const hostControlPlayers = players.filter((player) => {
+    if (player.status !== "left") return true;
+    const removedRound = removedRoundByPlayer[player.id];
+    if (!removedRound) return true;
+    return removedRound === roundIndex;
+  });
 
   useEffect(() => {
     if (!isHost || !allSubmitted || !currentRoundId) return;
@@ -1332,14 +1479,14 @@ export default function GamePage() {
                             <Users className="h-5 w-5" />
                           </Button>
                         </DrawerTrigger>
-                        <DrawerContent className="border-t-[3px] border-[#1f2b7a] bg-white shadow-[0_-25px_60px_rgba(31,43,122,0.28)] dark:border-[#7ce7ff] dark:bg-[#0f1729]">
+                        <DrawerContent className="border-t-[3px] border-[#1f2b7a] bg-white shadow-[0_-25px_60px_rgba(31,43,122,0.28)] dark:border-[#7ce7ff] dark:bg-[#0f1729] [&>div:first-child]:hidden">
                           <DrawerTitle className="sr-only">
                             Host Controls
                           </DrawerTitle>
                           <div className="px-6 pb-[calc(env(safe-area-inset-bottom)+3.5rem)] pt-3">
                             <div className="pointer-events-none mx-auto mb-5 h-1.5 w-12 rounded-full bg-[#1f2b7a]/20 dark:bg-[#7ce7ff]/30" />
                             <div className="space-y-3">
-                              {players.map((player) => (
+                              {hostControlPlayers.map((player) => (
                                 <div
                                   key={player.id}
                                   className="group flex items-center justify-between gap-4 rounded-[24px] border-2 border-[#1f2b7a] bg-white p-3 shadow-[0_8px_20px_rgba(31,43,122,0.12)] transition-all active:scale-[0.99] dark:border-[#7ce7ff]/40 dark:bg-slate-900"
@@ -1385,11 +1532,25 @@ export default function GamePage() {
                                             Frozen
                                           </span>
                                         )}
+                                        {player.status === "left" && (
+                                          <span className="inline-flex rounded-full border border-slate-300 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500 dark:border-slate-600 dark:text-slate-400">
+                                            Left
+                                          </span>
+                                        )}
                                       </div>
                                     </div>
                                   </div>
                                 <div className="flex shrink-0 items-center gap-2">
-                                  {player.status === "busted" ? (
+                                  {player.status === "left" ? (
+                                    <Button
+                                      type="button"
+                                      disabled
+                                      variant="outline"
+                                      className="h-10 w-full px-5 text-[11px] tracking-wider"
+                                    >
+                                      Removed
+                                    </Button>
+                                  ) : player.status === "busted" ? (
                                     <Button
                                       type="button"
                                       onClick={() =>
@@ -1439,6 +1600,46 @@ export default function GamePage() {
                                       </Button>
                                     </>
                                   )}
+                                  {player.id !== hostPlayerId &&
+                                    player.status !== "left" && (
+                                      <AlertDialog>
+                                        <AlertDialogTrigger asChild>
+                                          <Button
+                                            type="button"
+                                            variant="outline"
+                                            className="h-10 w-10 border-slate-300 p-0 text-slate-600 shadow-none hover:bg-slate-50"
+                                            aria-label={`Remove ${player.name}`}
+                                          >
+                                            <X className="h-5 w-5 text-rose-400" />
+                                          </Button>
+                                        </AlertDialogTrigger>
+                                        <AlertDialogContent size="sm">
+                                          <AlertDialogHeader>
+                                            <AlertDialogTitle>
+                                              Remove player?
+                                            </AlertDialogTitle>
+                                            <AlertDialogDescription>
+                                              This removes them from the current
+                                              game. They can rejoin with the
+                                              code later.
+                                            </AlertDialogDescription>
+                                          </AlertDialogHeader>
+                                          <AlertDialogFooter>
+                                            <AlertDialogCancel>
+                                              Cancel
+                                            </AlertDialogCancel>
+                                            <AlertDialogAction
+                                              variant="gummyRed"
+                                              onClick={() =>
+                                                handleRemovePlayer(player.id)
+                                              }
+                                            >
+                                              Remove
+                                            </AlertDialogAction>
+                                          </AlertDialogFooter>
+                                        </AlertDialogContent>
+                                      </AlertDialog>
+                                    )}
                                 </div>
                                 </div>
                               ))}
@@ -1475,13 +1676,13 @@ export default function GamePage() {
                   <Users className="h-5 w-5" />
                 </Button>
               </DrawerTrigger>
-              <DrawerContent className="border-t-[3px] border-[#1f2b7a] bg-white shadow-[0_-25px_60px_rgba(31,43,122,0.28)] dark:border-[#7ce7ff] dark:bg-[#0f1729]">
+              <DrawerContent className="border-t-[3px] border-[#1f2b7a] bg-white shadow-[0_-25px_60px_rgba(31,43,122,0.28)] dark:border-[#7ce7ff] dark:bg-[#0f1729] [&>div:first-child]:hidden">
                 <DrawerTitle className="sr-only">Host Controls</DrawerTitle>
                 <div className="px-6 pb-[calc(env(safe-area-inset-bottom)+3.5rem)] pt-3">
                   <div className="pointer-events-none mx-auto mb-5 h-1.5 w-12 rounded-full bg-[#1f2b7a]/20 dark:bg-[#7ce7ff]/30" />
 
                   <div className="space-y-3">
-                    {players.map((player) => (
+                    {hostControlPlayers.map((player) => (
                       <div
                         key={player.id}
                         className="group flex items-center justify-between gap-4 rounded-[24px] border-2 border-[#1f2b7a] bg-white p-3 shadow-[0_8px_20px_rgba(31,43,122,0.12)] transition-all active:scale-[0.99] dark:border-[#7ce7ff]/40 dark:bg-slate-900"
@@ -1525,11 +1726,25 @@ export default function GamePage() {
                                   Frozen
                                 </span>
                               )}
+                              {player.status === "left" && (
+                                <span className="inline-flex rounded-full border border-slate-300 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500 dark:border-slate-600 dark:text-slate-400">
+                                  Left
+                                </span>
+                              )}
                             </div>
                           </div>
                         </div>
                         <div className="flex shrink-0 items-center gap-2">
-                          {player.status === "busted" ? (
+                          {player.status === "left" ? (
+                            <Button
+                              type="button"
+                              disabled
+                              variant="outline"
+                              className="h-10 w-full px-5 text-[11px] tracking-wider"
+                            >
+                              Removed
+                            </Button>
+                          ) : player.status === "busted" ? (
                             <button
                               type="button"
                               onClick={() => handleClearPlayerStatus(player.id)}
@@ -1571,6 +1786,43 @@ export default function GamePage() {
                               </button>
                             </>
                           )}
+                          {player.id !== hostPlayerId &&
+                            player.status !== "left" && (
+                              <AlertDialog>
+                                <AlertDialogTrigger asChild>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    className="h-10 w-10 border-slate-300 p-0 text-slate-600 shadow-none hover:bg-slate-50"
+                                    aria-label={`Remove ${player.name}`}
+                                  >
+                                    <X className="h-5 w-5 text-rose-400" />
+                                  </Button>
+                                </AlertDialogTrigger>
+                                <AlertDialogContent size="sm">
+                                  <AlertDialogHeader>
+                                    <AlertDialogTitle>
+                                      Remove player?
+                                    </AlertDialogTitle>
+                                    <AlertDialogDescription>
+                                      This removes them from the current game.
+                                      They can rejoin with the code later.
+                                    </AlertDialogDescription>
+                                  </AlertDialogHeader>
+                                  <AlertDialogFooter>
+                                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                    <AlertDialogAction
+                                      variant="gummyRed"
+                                      onClick={() =>
+                                        handleRemovePlayer(player.id)
+                                      }
+                                    >
+                                      Remove
+                                    </AlertDialogAction>
+                                  </AlertDialogFooter>
+                                </AlertDialogContent>
+                              </AlertDialog>
+                            )}
                         </div>
                       </div>
                     ))}

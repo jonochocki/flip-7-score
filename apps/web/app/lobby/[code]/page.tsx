@@ -122,6 +122,9 @@ export default function LobbyPage() {
   const hasInvalidToastRef = useRef(false);
   const lastRealtimeToastRef = useRef(0);
   const hasRealtimeIssueRef = useRef(false);
+  const hasRemovedRedirectRef = useRef(false);
+  const presenceLeaveTimersRef = useRef<Map<string, number>>(new Map());
+  const hasClosedLobbyRef = useRef(false);
 
   const code = useMemo(
     () => (typeof params.code === "string" ? params.code.toUpperCase() : ""),
@@ -134,6 +137,7 @@ export default function LobbyPage() {
     hasInvalidToastRef.current = true;
     toast.error("Invalid lobby code", {
       description: "Sending you back home.",
+      descriptionClassName: "text-black",
     });
     invalidRedirectRef.current = window.setTimeout(() => {
       router.replace("/");
@@ -145,6 +149,15 @@ export default function LobbyPage() {
       if (invalidRedirectRef.current) {
         window.clearTimeout(invalidRedirectRef.current);
       }
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      presenceLeaveTimersRef.current.forEach((timer) => {
+        window.clearTimeout(timer);
+      });
+      presenceLeaveTimersRef.current.clear();
     };
   }, []);
 
@@ -281,6 +294,95 @@ export default function LobbyPage() {
     [supabaseClient],
   );
 
+  const clearPresenceLeaveTimer = useCallback((playerId: string) => {
+    const existing = presenceLeaveTimersRef.current.get(playerId);
+    if (existing) {
+      window.clearTimeout(existing);
+      presenceLeaveTimersRef.current.delete(playerId);
+    }
+  }, []);
+
+  const schedulePresenceLeave = useCallback(
+    (playerId: string, isHostLeaving: boolean) => {
+      if (!gameId || !playerId) return;
+      if (presenceLeaveTimersRef.current.has(playerId)) return;
+      const activeGameId = gameId;
+      const timer = window.setTimeout(async () => {
+        presenceLeaveTimersRef.current.delete(playerId);
+        if (isHostLeaving) {
+          if (hasClosedLobbyRef.current) return;
+          hasClosedLobbyRef.current = true;
+          const { error } = await supabaseClient.rpc(
+            "handle_lobby_departure",
+            {
+              p_game_id: activeGameId,
+              p_player_id: playerId,
+            },
+          );
+          if (error) {
+            console.error("[lobby] close lobby error", error);
+            hasClosedLobbyRef.current = false;
+            return;
+          }
+          toast.error("Host left the lobby", {
+            description: "Sending you back home.",
+            descriptionClassName: "text-black",
+          });
+          router.replace("/");
+          return;
+        }
+
+        if (!currentPlayerId || hostPlayerId !== currentPlayerId) return;
+        const { error } = await supabaseClient.rpc(
+          "handle_lobby_departure",
+          {
+            p_game_id: activeGameId,
+            p_player_id: playerId,
+          },
+        );
+        if (error) {
+          console.error("[lobby] remove player error", error);
+          return;
+        }
+        await loadPlayers(activeGameId, supabaseClient);
+      }, 3000);
+      presenceLeaveTimersRef.current.set(playerId, timer);
+    },
+    [currentPlayerId, gameId, hostPlayerId, loadPlayers, router, supabaseClient],
+  );
+
+  const handlePresenceSync = useCallback(
+    (state: Record<string, unknown[]>) => {
+      Object.keys(state).forEach((playerId) => {
+        clearPresenceLeaveTimer(playerId);
+      });
+    },
+    [clearPresenceLeaveTimer],
+  );
+
+  const handlePresenceJoin = useCallback(
+    (payload: { key: string }) => {
+      if (!payload.key) return;
+      clearPresenceLeaveTimer(payload.key);
+    },
+    [clearPresenceLeaveTimer],
+  );
+
+  const handlePresenceLeave = useCallback(
+    (payload: { key: string }) => {
+      if (!payload.key) return;
+      if (payload.key === currentPlayerId) return;
+      if (payload.key === hostPlayerId) {
+        schedulePresenceLeave(payload.key, true);
+        return;
+      }
+      if (currentPlayerId && hostPlayerId === currentPlayerId) {
+        schedulePresenceLeave(payload.key, false);
+      }
+    },
+    [currentPlayerId, hostPlayerId, schedulePresenceLeave],
+  );
+
   const lobbyPostgresHandlers = useMemo(() => {
     if (!gameId || !currentPlayerId) return [];
     return [
@@ -321,18 +423,65 @@ export default function LobbyPage() {
     ];
   }, [code, currentPlayerId, gameId, loadPlayers, router, supabaseClient]);
 
-  useRealtimeChannel({
+  const { broadcastMessage } = useRealtimeChannel({
     supabase: supabaseClient,
     key: gameId ? `lobby:${gameId}` : "",
     enabled: !!gameId && !!currentPlayerId,
     postgres: lobbyPostgresHandlers,
+    broadcast:
+      gameId && currentPlayerId
+        ? [
+            {
+              event: "player_removed",
+              onMessage: ({ payload }) => {
+                const removedId = payload?.player_id;
+                if (!removedId || removedId !== currentPlayerId) return;
+                if (hasRemovedRedirectRef.current) return;
+                hasRemovedRedirectRef.current = true;
+                try {
+                  sessionStorage.removeItem(`flip7_player_${code}`);
+                  localStorage.removeItem(`flip7_player_${code}`);
+                } catch {
+                  // Ignore storage failures.
+                }
+                toast.error("Removed from lobby", {
+                  description: "Sending you back home.",
+                  descriptionClassName: "text-black",
+                });
+                router.replace("/");
+              },
+            },
+          ]
+        : [],
+    presence:
+      gameId && currentPlayerId
+        ? {
+            key: currentPlayerId,
+            payload: {
+              player_id: currentPlayerId,
+              game_id: gameId,
+              user_id: session?.user.id ?? null,
+            },
+            onSync: handlePresenceSync,
+            onJoin: handlePresenceJoin,
+            onLeave: handlePresenceLeave,
+          }
+        : undefined,
     onStatusChange: (status) => {
       if (status === "SUBSCRIBED") {
         console.info("[lobby] channel status:", status);
         if (hasRealtimeIssueRef.current) {
-          toast.success("Connection restored");
+          const now = Date.now();
+          if (
+            typeof document === "undefined" ||
+            document.visibilityState === "visible"
+          ) {
+            if (now - lastRealtimeToastRef.current > 4000) {
+              toast.success("Connection restored", { id: "lobby-realtime-restored" });
+              lastRealtimeToastRef.current = now;
+            }
+          }
           hasRealtimeIssueRef.current = false;
-          lastRealtimeToastRef.current = Date.now();
         }
       }
     },
@@ -402,6 +551,60 @@ export default function LobbyPage() {
     }
   }, []);
 
+  useEffect(() => {
+    if (state !== "ready") return;
+    if (!currentPlayerId) return;
+    if (!players.length) return;
+    const stillInLobby = players.some((player) => player.id === currentPlayerId);
+    if (stillInLobby) return;
+    if (hasRemovedRedirectRef.current) return;
+    hasRemovedRedirectRef.current = true;
+    try {
+      sessionStorage.removeItem(`flip7_player_${code}`);
+      localStorage.removeItem(`flip7_player_${code}`);
+    } catch {
+      // Ignore storage failures.
+    }
+    toast.error("Removed from lobby", {
+      description: "Sending you back home.",
+      descriptionClassName: "text-black",
+    });
+    router.replace("/");
+  }, [code, currentPlayerId, players, router, state]);
+
+  useEffect(() => {
+    if (state !== "ready") return;
+    if (!currentPlayerId || !gameId) return;
+    let isActive = true;
+    const interval = window.setInterval(async () => {
+      if (!isActive) return;
+      const { data: player } = await supabaseClient
+        .from("players")
+        .select("id")
+        .eq("id", currentPlayerId)
+        .maybeSingle();
+      if (player?.id) return;
+      if (hasRemovedRedirectRef.current) return;
+      hasRemovedRedirectRef.current = true;
+      try {
+        sessionStorage.removeItem(`flip7_player_${code}`);
+        localStorage.removeItem(`flip7_player_${code}`);
+      } catch {
+        // Ignore storage failures.
+      }
+      toast.error("Removed from lobby", {
+        description: "Sending you back home.",
+        descriptionClassName: "text-black",
+      });
+      router.replace("/");
+    }, 3000);
+
+    return () => {
+      isActive = false;
+      window.clearInterval(interval);
+    };
+  }, [code, currentPlayerId, gameId, router, state, supabaseClient]);
+
   const handleJoin = async () => {
     const nextName = profileName.trim();
     if (!nextName) return;
@@ -446,6 +649,36 @@ export default function LobbyPage() {
     setGameId(game_id);
     setState("ready");
   };
+
+  const handleRemovePlayer = useCallback(
+    async (playerId: string) => {
+      if (!gameId || !currentPlayerId || hostPlayerId !== currentPlayerId) {
+        return;
+      }
+      if (!playerId || playerId === currentPlayerId) return;
+      const { error } = await supabaseClient.rpc("handle_lobby_departure", {
+        p_game_id: gameId,
+        p_player_id: playerId,
+      });
+      if (error) {
+        console.error("[lobby] remove player error", error);
+        toast.error("Couldn't remove player", {
+          description: "Try again in a moment.",
+        });
+        return;
+      }
+      await broadcastMessage("player_removed", { player_id: playerId });
+      await loadPlayers(gameId, supabaseClient);
+    },
+    [
+      broadcastMessage,
+      currentPlayerId,
+      gameId,
+      hostPlayerId,
+      loadPlayers,
+      supabaseClient,
+    ],
+  );
 
   const currentPlayer = players.find((player) => player.id === currentPlayerId);
   const isHost = !!currentPlayerId && hostPlayerId === currentPlayerId;
@@ -642,6 +875,7 @@ export default function LobbyPage() {
                   hostPlayerId={hostPlayerId}
                   isHost={isHost}
                   onOpenProfile={openProfileDrawer}
+                  onRemovePlayer={handleRemovePlayer}
                   layoutMode={layoutMode}
                 />
               </section>
